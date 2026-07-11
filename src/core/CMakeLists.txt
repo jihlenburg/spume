@@ -2,7 +2,9 @@
 # Copyright (C) 2026 Joern Ihlenburg
 
 add_library(spume-core STATIC
+    formats.cpp
     reduce.cpp
+    sell.cpp
     version.cpp
 )
 add_library(spume::core ALIAS spume-core)

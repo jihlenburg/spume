@@ -3,3 +3,4 @@
 
 spume_add_test(spume-unit-sanity unit test_sanity.cpp)
 spume_add_test(spume-unit-reduce unit test_reduce.cpp)
+spume_add_test(spume-unit-formats unit test_formats.cpp)
