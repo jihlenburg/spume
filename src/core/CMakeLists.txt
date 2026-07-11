@@ -6,6 +6,7 @@ add_library(spume-core STATIC
     poisson.cpp
     reduce.cpp
     sell.cpp
+    solver.cpp
     version.cpp
 )
 add_library(spume::core ALIAS spume-core)
