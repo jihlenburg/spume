@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Joern Ihlenburg
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    name: SPDX + clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: SPDX headers
+        run: sh scripts/check_spdx.sh
+      - name: Install clang-format-18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-18
+      - name: clang-format
+        run: CLANG_FORMAT=clang-format-18 sh scripts/check_format.sh
+
+  build-test:
+    name: ${{ matrix.preset }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset: cpu-debug
+            test-preset: all-debug
+          - preset: cpu-release
+            test-preset: all
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        run: ctest --preset ${{ matrix.test-preset }}
+
+  build-bench:
+    name: cpu-bench (build only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset cpu-bench
+      - name: Build
+        run: cmake --build --preset cpu-bench
