@@ -3,6 +3,7 @@
 
 add_library(spume-core STATIC
     formats.cpp
+    poisson.cpp
     reduce.cpp
     sell.cpp
     version.cpp
