@@ -1,0 +1,53 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {"major": 3, "minor": 25, "patch": 0},
+    "configurePresets": [
+        {
+            "name": "cpu-common",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}"
+        },
+        {
+            "name": "cpu-debug",
+            "displayName": "CPU Debug",
+            "inherits": "cpu-common",
+            "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug"}
+        },
+        {
+            "name": "cpu-release",
+            "displayName": "CPU Release",
+            "inherits": "cpu-common",
+            "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}
+        },
+        {
+            "name": "cpu-bench",
+            "displayName": "CPU Bench (-march=native)",
+            "inherits": "cpu-common",
+            "cacheVariables": {"CMAKE_BUILD_TYPE": "Release", "SPUME_MARCH_NATIVE": "ON"}
+        }
+    ],
+    "buildPresets": [
+        {"name": "cpu-debug", "configurePreset": "cpu-debug"},
+        {"name": "cpu-release", "configurePreset": "cpu-release"},
+        {"name": "cpu-bench", "configurePreset": "cpu-bench"}
+    ],
+    "testPresets": [
+        {
+            "name": "unit",
+            "configurePreset": "cpu-release",
+            "filter": {"include": {"label": "unit"}},
+            "output": {"outputOnFailure": true}
+        },
+        {
+            "name": "all",
+            "configurePreset": "cpu-release",
+            "output": {"outputOnFailure": true}
+        },
+        {
+            "name": "all-debug",
+            "configurePreset": "cpu-debug",
+            "output": {"outputOnFailure": true}
+        }
+    ]
+}
