@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Joern Ihlenburg
+#
+# Nightly contract suite (ADR-0001): once against the vendored OpenFOAM
+# (cached build), once against upstream develop as the merge canary. A red
+# canary means upstream changed an invariant SPUME depends on — that is
+# the signal working as designed, months before a forced integration.
+
+name: nightly-contract
+
+# The cron trigger is enabled together with the recorded iteration bands
+# (tests/contract/expected/) — until those exist a scheduled run could
+# only fail on the missing file, which would be noise, not signal.
+on:
+  workflow_dispatch:
+
+jobs:
+  contract-vendored:
+    name: contract (vendored v2606)
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install OpenFOAM build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex libopenmpi-dev openmpi-bin
+      - name: Cache OpenFOAM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/openfoam/platforms
+            vendor/openfoam/build
+          key: openfoam-${{ hashFiles('vendor/openfoam/META-INFO/**', 'patches/**') }}
+      - name: Build vendored OpenFOAM
+        run: |
+          cd vendor/openfoam
+          bash -c 'source etc/bashrc 2>/dev/null || true; export WM_NCOMPPROCS=$(nproc); ./Allwmake -j $(nproc) -s'
+      - name: Configure
+        run: cmake --preset cpu-release -DSPUME_WITH_OPENFOAM=ON
+      - name: Build
+        run: cmake --build --preset cpu-release
+      - name: Contract tests
+        run: ctest --test-dir build/cpu-release -L contract --output-on-failure
+
+  contract-upstream-develop:
+    name: merge canary (upstream develop)
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install OpenFOAM build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex libopenmpi-dev openmpi-bin
+      - name: Clone upstream develop
+        run: |
+          git clone --depth 1 --branch develop \
+            https://develop.openfoam.com/Development/openfoam.git upstream-develop
+          echo "UPSTREAM_SHA=$(git -C upstream-develop rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Cache upstream build
+        uses: actions/cache@v4
+        with:
+          path: |
+            upstream-develop/platforms
+            upstream-develop/build
+          key: openfoam-develop-${{ env.UPSTREAM_SHA }}
+      - name: Build upstream develop
+        run: |
+          cd upstream-develop
+          bash -c 'source etc/bashrc 2>/dev/null || true; export WM_NCOMPPROCS=$(nproc); ./Allwmake -j $(nproc) -s'
+      - name: Contract tests against upstream develop
+        env:
+          SPUME_OPENFOAM_DIR: ${{ github.workspace }}/upstream-develop
+        run: sh tests/contract/run_contract_cavity.sh

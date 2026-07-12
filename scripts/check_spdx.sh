@@ -10,8 +10,8 @@ set -u
 
 fail=0
 for f in $(git ls-files \
-    '*.cpp' '*.hpp' '*.h' '*.c' '*.sh' '*.py' '*.cmake' '*.yml' '*.yaml' \
-    'CMakeLists.txt' '*/CMakeLists.txt'); do
+    '*.cpp' '*.hpp' '*.h' '*.c' '*.C' '*.H' '*.sh' '*.py' '*.cmake' \
+    '*.yml' '*.yaml' 'CMakeLists.txt' '*/CMakeLists.txt'); do
     case "$f" in
     vendor/* | tests/thirdparty/*) continue ;;
     esac

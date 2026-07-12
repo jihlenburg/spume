@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Joern Ihlenburg
+
+spumeContractLdu.C
+
+EXE = $(FOAM_USER_APPBIN)/spumeContractLdu

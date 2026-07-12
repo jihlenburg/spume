@@ -13,6 +13,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(SPUME_MARCH_NATIVE "Tune generated code for the build machine" OFF)
 option(SPUME_BUILD_TESTS "Build the SPUME test suite" ON)
 option(SPUME_BUILD_BENCH "Build the SPUME bench harness" ON)
+option(SPUME_WITH_OPENFOAM "Enable contract tests against a built OpenFOAM tree" OFF)
 
 find_package(OpenMP REQUIRED COMPONENTS CXX)
 
