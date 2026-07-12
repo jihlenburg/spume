@@ -3,3 +3,8 @@ build/
 compile_commands.json
 __pycache__/
 *.pyc
+
+# OpenFOAM (wmake) build artifacts inside the vendored tree
+vendor/openfoam/platforms/
+vendor/openfoam/build/
+lnInclude/
