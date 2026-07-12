@@ -3,6 +3,20 @@
 Binding guidance for AI coding agents in this repository. Read fully before
 changing anything. When a task conflicts with a rule here, stop and ask.
 
+## Required reading
+
+- Before any architectural or numerics change: `docs/adr/` (start with the
+  index). Never revisit a decision recorded in an ADR without explicit
+  maintainer instruction — the rejected-alternatives sections exist to
+  prevent exactly that.
+- Before any performance claim or optimization: `docs/hardware.md` (the
+  roofline numbers that govern this project) and the Performance policy
+  below.
+- For current scope: `docs/roadmap.md`. Do not build ahead of the active
+  milestone.
+- When a session produces a new decision, record it as an ADR before the
+  session ends.
+
 ## Project
 
 SPUME is a bandwidth-first CFD engine derived from OpenFOAM: mixed-precision
@@ -47,7 +61,7 @@ the binary, repo slug, C++ namespace, and CMake targets.
 - Every performance claim requires counter evidence (uProf / rocprof / Metal
   counters): achieved GB/s vs. measured roofline, per kernel, attached to
   the PR.
-- If the portable version already reaches ≥90% of roofline, delete the
+- If the portable version already reaches >=90% of roofline, delete the
   specialized version.
 - Benchmarks: fixed power mode, warm-up runs, I/O excluded from the timed
   region, hardware/kernel/driver versions recorded.
@@ -74,7 +88,7 @@ the binary, repo slug, C++ namespace, and CMake targets.
 - Commit authorship is human-only. Never add `Co-Authored-By:` trailers,
   "Generated with" bylines, emoji signatures, or any tool/AI attribution to
   commit messages, PR descriptions, or changelogs. Accountability for every
-  line rests with the human who commits it.
+  line rests with the human who commits it. (ADR-0011)
 - No new dependencies without explicit maintainer approval. No AGPL or
   proprietary code. Never copy code from other projects without approval —
   reimplement from ideas.
@@ -98,6 +112,7 @@ the binary, repo slug, C++ namespace, and CMake targets.
 - Commit generated kernels, benchmark artifacts, or case data.
 - Add dependencies or network access in the build without approval.
 - Claim performance without counter data.
+- Revisit ADR-recorded decisions without maintainer instruction.
 
 ## Repository configuration
 
@@ -106,6 +121,7 @@ the binary, repo slug, C++ namespace, and CMake targets.
 - `.githooks/commit-msg` strips any `Co-Authored-By:` trailer as hard
   enforcement; repo setup runs `git config core.hooksPath .githooks`.
   Do not modify or bypass hooks.
+- `CLAUDE.md` is a symlink to this file; keep it that way.
 
 ## Commands
 
