@@ -23,6 +23,12 @@ i.e. the win is bandwidth, not compute.
 | Build | `cmake --preset cpu-bench` @ commit of this doc |
 | Date | 2026-07-12 |
 
+> **Note:** this container is *not* the primary dev target. The rooflines
+> that govern SPUME's design live in `docs/hardware.md` (Strix Halo:
+> ~124 GB/s CPU-aggregate, ~212 GB/s GPU-reachable); the only roofline
+> valid for the numbers below is the STREAM triad measured here, on the
+> same machine, in the same session.
+
 ## Methodology and honest caveats
 
 - Warm-up runs precede every timed region; best-of-reps is reported; no
