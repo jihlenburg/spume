@@ -17,11 +17,7 @@
 // merge canary must go red. Exit code 0 and the SPUME-CONTRACT-LDU: OK
 // line are the pass signal.
 
-#include "argList.H"
-#include "Time.H"
-#include "fvMesh.H"
-
-using namespace Foam;
+#include "fvCFD.H"
 
 int main(int argc, char* argv[])
 {

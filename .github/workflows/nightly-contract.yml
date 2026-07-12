@@ -8,10 +8,9 @@
 
 name: nightly-contract
 
-# The cron trigger is enabled together with the recorded iteration bands
-# (tests/contract/expected/) — until those exist a scheduled run could
-# only fail on the missing file, which would be noise, not signal.
 on:
+  schedule:
+    - cron: "0 3 * * *"
   workflow_dispatch:
 
 jobs:
@@ -33,8 +32,11 @@ jobs:
             vendor/openfoam/build
           key: openfoam-${{ hashFiles('vendor/openfoam/META-INFO/**', 'patches/**') }}
       - name: Build vendored OpenFOAM
+        # The empty modules/ dir keeps the pruned tree's top-level
+        # Allwmake happy (see vendor/README.md, "Known quirk").
         run: |
           cd vendor/openfoam
+          mkdir -p modules
           bash -c 'source etc/bashrc 2>/dev/null || true; export WM_NCOMPPROCS=$(nproc); ./Allwmake -j $(nproc) -s'
       - name: Configure
         run: cmake --preset cpu-release -DSPUME_WITH_OPENFOAM=ON

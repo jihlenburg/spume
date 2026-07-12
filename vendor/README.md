@@ -20,6 +20,18 @@
 **Pruned**: all other `tutorials/`, `plugins/`, `modules/`, `doc/`,
 `etc-mingw/`.
 
+## Known quirk of the pruned tree
+
+Top-level `Allwmake` ends with `cd modules && wmake -all`; with `modules/`
+pruned the script exits non-zero *after* successfully building everything.
+Create an empty `modules/` directory before building (untracked, so the
+vendored tree stays pristine):
+
+```sh
+cd vendor/openfoam && mkdir -p modules
+source etc/bashrc && ./Allwmake -j $(nproc) -s
+```
+
 ## Rules (ADR-0001)
 
 - Never edit files under `vendor/` directly. The only change mechanism is

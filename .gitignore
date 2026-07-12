@@ -8,3 +8,6 @@ __pycache__/
 vendor/openfoam/platforms/
 vendor/openfoam/build/
 lnInclude/
+
+# wmake in-source output dirs (contract apps)
+**/Make/linux64*/

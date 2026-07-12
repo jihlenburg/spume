@@ -10,7 +10,8 @@
 
 set -eu
 
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null || CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) ||
+    ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 OF_DIR="${SPUME_OPENFOAM_DIR:-$ROOT/vendor/openfoam}"
 WORK="${SPUME_CONTRACT_WORK:-$ROOT/build/contract}"
 

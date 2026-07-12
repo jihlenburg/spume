@@ -42,7 +42,7 @@ def main() -> None:
 
     cont = [
         float(m)
-        for m in re.findall(r"continuity errors.*?max:\s*([0-9eE+.-]+)", log)
+        for m in re.findall(r"continuity errors : sum local = ([^,]+),", log)
     ]
     if not cont:
         fail("no continuity-error lines found in log")
@@ -68,14 +68,21 @@ def main() -> None:
     if len(p_iters) != nsolves:
         fail(f"{len(p_iters)} p-solves, expected exactly {nsolves}")
 
+    # Judge the final corrector of each time step only: intermediate
+    # correctors are solved loose (relTol) and carry the decaying
+    # impulsive-start transient, which is not a contract invariant.
+    stride = int(bands.get("continuity_stride", ["1"])[0])
+    judged = cont[stride - 1 :: stride]
+    if not judged:
+        fail("no continuity entries left to judge; bands file inconsistent")
     max_cont = float(bands["max_continuity"][0])
-    worst = max(abs(c) for c in cont)
+    worst = max(abs(c) for c in judged)
     if worst > max_cont:
         fail(f"worst continuity error {worst} > {max_cont}")
 
     print(
         f"check_bands: OK (first {p_iters[0]}, total {got_total} over "
-        f"{len(p_iters)} solves, worst continuity {worst:.3e})"
+        f"{len(p_iters)} solves, worst judged continuity {worst:.3e})"
     )
 
 

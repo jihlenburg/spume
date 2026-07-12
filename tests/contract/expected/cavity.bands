@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Joern Ihlenburg
+#
+# Recorded 2026-07-12 against vendored OpenFOAM v2606 (api 2606, patch 0),
+# GCC 13.3.0, linux64GccDPInt32Opt: icoFoam cavity 20x20x1, GAMG p-solver
+# (GaussSeidel smoother), 10 time steps x 2 PISO correctors.
+#
+# Bands, not exact values (numerics policy): rounding-level drift moves
+# iteration counts by a step; a changed GAMG agglomeration or solver
+# semantic moves them out of band.
+
+# Continuity is judged on the FINAL corrector of each time step (every
+# stride-th entry): loose intermediate correctors (relTol 0.05) carry a
+# decaying impulsive-start transient that is not a contract invariant;
+# the final corrector (relTol 0, tol 1e-06) sits at ~1e-08 throughout.
+
+first_p_iters   3     2       # first p-solve: 3 iterations, +-2
+total_p_iters   154   0.10    # sum over all p-solves, +-10%
+p_solves        20    0       # exactly 10 steps x 2 correctors
+continuity_stride 2           # judge every 2nd entry (final corrector)
+max_continuity  1e-7          # worst final-corrector |sum local|
