@@ -22,3 +22,4 @@ one-line entry in the index below.
 | 0010 | Explicit engines for eligible case classes   | Accepted |
 | 0011 | Human-only commit authorship                 | Accepted |
 | 0012 | Test framework: vendored doctest             | Accepted |
+| 0013 | Benchmark evidence on non-lab machines       | Accepted |
