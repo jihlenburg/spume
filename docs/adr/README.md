@@ -23,3 +23,4 @@ one-line entry in the index below.
 | 0011 | Human-only commit authorship                 | Accepted |
 | 0012 | Test framework: vendored doctest             | Accepted |
 | 0013 | Benchmark evidence on non-lab machines       | Accepted |
+| 0014 | Upstream baseline: OpenFOAM v2606, pruned    | Accepted |
