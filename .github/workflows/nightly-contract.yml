@@ -16,11 +16,15 @@ on:
 jobs:
   contract-vendored:
     name: contract (vendored v2606)
-    runs-on: ubuntu-latest
+    # Self-hosted Strix Halo runner (ADR-0013). The runner account has no
+    # sudo; build prerequisites are pre-provisioned on the host, so the apt
+    # step only runs when the job is moved back to a GitHub-hosted machine.
+    runs-on: [self-hosted, halobox]
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - name: Install OpenFOAM build prerequisites
+        if: runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y flex libopenmpi-dev openmpi-bin
@@ -47,11 +51,12 @@ jobs:
 
   contract-upstream-develop:
     name: merge canary (upstream develop)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, halobox]
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - name: Install OpenFOAM build prerequisites
+        if: runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y flex libopenmpi-dev openmpi-bin
