@@ -53,6 +53,14 @@ jobs:
     name: merge canary (upstream develop)
     runs-on: [self-hosted, halobox]
     timeout-minutes: 350
+    # Since at least 2026-07-14, develop.openfoam.com requires a signed-in
+    # account even for anonymous read access (git and web both redirect to
+    # sign-in). The canary therefore needs the OPENFOAM_GITLAB_TOKEN
+    # repository secret (GitLab personal access token, read_repository
+    # scope). Without it the job skips with a warning rather than failing
+    # red every night; the vendored contract job above is unaffected.
+    env:
+      OPENFOAM_GITLAB_TOKEN: ${{ secrets.OPENFOAM_GITLAB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Install OpenFOAM build prerequisites
@@ -60,12 +68,26 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y flex libopenmpi-dev openmpi-bin
+      - name: Check upstream access token
+        id: gate
+        run: |
+          if [ -n "$OPENFOAM_GITLAB_TOKEN" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Merge canary skipped: develop.openfoam.com requires authentication and the OPENFOAM_GITLAB_TOKEN secret is not set."
+          fi
       - name: Clone upstream develop
+        if: steps.gate.outputs.has_token == 'true'
         run: |
           git clone --depth 1 --branch develop \
-            https://develop.openfoam.com/Development/openfoam.git upstream-develop
+            "https://oauth2:${OPENFOAM_GITLAB_TOKEN}@develop.openfoam.com/Development/openfoam.git" \
+            upstream-develop
+          git -C upstream-develop remote set-url origin \
+            https://develop.openfoam.com/Development/openfoam.git
           echo "UPSTREAM_SHA=$(git -C upstream-develop rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Cache upstream build
+        if: steps.gate.outputs.has_token == 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -73,10 +95,12 @@ jobs:
             upstream-develop/build
           key: openfoam-develop-${{ env.UPSTREAM_SHA }}
       - name: Build upstream develop
+        if: steps.gate.outputs.has_token == 'true'
         run: |
           cd upstream-develop
           bash -c 'source etc/bashrc 2>/dev/null || true; export WM_NCOMPPROCS=$(nproc); ./Allwmake -j $(nproc) -s'
       - name: Contract tests against upstream develop
+        if: steps.gate.outputs.has_token == 'true'
         env:
           SPUME_OPENFOAM_DIR: ${{ github.workspace }}/upstream-develop
         run: sh tests/contract/run_contract_cavity.sh
