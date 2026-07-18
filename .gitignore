@@ -11,3 +11,6 @@ lnInclude/
 
 # wmake in-source output dirs (contract apps)
 **/Make/linux64*/
+
+# Bootstrap-generated OpenFOAM config/env (system libs)
+.openfoam-config/
