@@ -22,6 +22,11 @@
 // selection tables, solverPerformance, and scalarField.
 #include "lduMatrix.H"
 
+// GAMGAgglomeration: the cached, mesh-keyed multigrid coarsening hierarchy.
+// SPUME reuses this mature agglomeration (ADR-0001, "reuse the trunk") and runs
+// its own FP32 mixed-precision V-cycle on it.
+#include "GAMGAgglomeration.H"
+
 // Pin: SPUME targets the OpenFOAM v2606 API surface (ADR-0014). Defined by
 // wmake (WM_VERSION = OPENFOAM=2606). See compat/foam.hpp for the rationale.
 #if !defined(OPENFOAM)

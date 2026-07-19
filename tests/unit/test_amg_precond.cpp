@@ -6,6 +6,7 @@
 #include <span>
 #include <vector>
 
+#include "core/amg.hpp"
 #include "core/amg_precond.hpp"
 #include "core/equilibrate.hpp"
 #include "core/formats.hpp"
@@ -57,5 +58,50 @@ TEST_CASE("multi-level AMG preconditioner solves and accelerates fcg") {
     CHECK(r32.iterations <= r_cheb.iterations);
     for (std::size_t i = 0; i < n; ++i) {
         CHECK(x32[i] == doctest::Approx(x_cheb[i]).epsilon(1e-5));
+    }
+}
+
+TEST_CASE("AMG accepts an externally-supplied hierarchy (the GAMG-reuse path)") {
+    const spume::Csr a = spume::coo_to_csr(spume::gen::poisson7(24, 24, 24));
+    const spume::Sell<double> A = spume::sell_from_csr(a);
+    const auto n = static_cast<std::size_t>(a.nrows);
+    std::vector<double> b(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        b[i] = 0.5 - static_cast<double>(i % 13) * 0.1;
+    }
+
+    // Build a hierarchy externally (here from aggregate(), standing in for an
+    // OpenFOAM GAMGAgglomeration) and feed it to the external constructor.
+    std::vector<spume::Aggregation> hierarchy;
+    spume::Csr cur = a;
+    for (int lvl = 0; lvl < 4 && cur.nrows > 100; ++lvl) {
+        spume::Aggregation agg = spume::aggregate(cur);
+        if (agg.ncoarse >= cur.nrows) {
+            break;
+        }
+        spume::Csr coarse = spume::galerkin(cur, agg);
+        hierarchy.push_back(std::move(agg));
+        cur = std::move(coarse);
+    }
+    REQUIRE(hierarchy.size() >= 2);
+
+    const spume::AmgPrecond<float> amg(a, hierarchy);
+    CHECK(amg.num_levels() == static_cast<int>(hierarchy.size()) + 1);
+
+    spume::SolveOptions opt;
+    opt.tol = 1e-8;
+    opt.max_iter = 3000;
+    std::vector<double> x(n, 0.0);
+    const spume::SolveResult r =
+        spume::fcg(A, amg, std::span<const double>(b), std::span<double>(x), opt);
+    CHECK(r.converged);
+
+    // matches the FP64 reference solve
+    const auto eqop = spume::make_eq_operator<double>(a);
+    const spume::ChebyshevPrecond<double> cheb(eqop);
+    std::vector<double> xref(n, 0.0);
+    spume::fcg(A, cheb, std::span<const double>(b), std::span<double>(xref), opt);
+    for (std::size_t i = 0; i < n; ++i) {
+        CHECK(x[i] == doctest::Approx(xref[i]).epsilon(1e-5));
     }
 }

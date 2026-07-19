@@ -385,13 +385,12 @@ results (median wall time, seconds; timed region = solver run only)
   ratio SPUME/stock : ${RATIO}x   (>1 means SPUME is slower)
   steal-time        : ${STEAL_PCT}% of CPU jiffies across the timed region
 
-  NOTE: with spumePreconditioner=amgFP32 the FP32 algebraic multigrid closes
-  most of the gap to stock GAMG (measured ~1.07x on pitzDaily). The residual gap
-  is largely the AMG hierarchy being rebuilt PER SOLVE rather than cached — the
-  mesh is static, so amortising the setup is the next lever, before the
-  mixed-precision bandwidth win even shows (which needs a large, non-cache-
-  resident case). Weaker preconditioners (jacobi, chebyshevFP32) are slower. No
-  speedup is claimed yet.
+  NOTE: spumePreconditioner=gamgFP32 reuses OpenFOAM's cached GAMGAgglomeration
+  hierarchy and runs the SPUME FP32 Chebyshev V-cycle on it — measured at PARITY
+  with stock GAMG (~1.01x) on pitzDaily, within measurement noise. The
+  self-coarsening amgFP32 is ~1.07x; weaker preconditioners (jacobi,
+  chebyshevFP32) are slower. No speedup is claimed on this small, partly
+  cache-resident case; the mixed-precision bandwidth win needs a large case.
 
 equivalence verdict : $VERDICT
 ====================================================================

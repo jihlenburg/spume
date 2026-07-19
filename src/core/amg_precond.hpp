@@ -41,33 +41,36 @@ namespace spume {
 template<typename T>
 class AmgPrecond final : public Preconditioner {
 public:
+    // Self-coarsening: build the hierarchy with SPUME's own greedy aggregation.
     explicit AmgPrecond(const Csr& fine, ChebyshevOptions smoother_opt = {},
                         index_t coarse_size = 200, int max_levels = 20,
                         double coarse_tol = 1e-2, int coarse_max_iter = 500)
         : coarse_tol_(coarse_tol), coarse_max_iter_(coarse_max_iter) {
+        std::vector<Aggregation> aggs;
         Csr cur = fine;
-        while (static_cast<int>(levels_.size()) + 1 < max_levels &&
+        while (static_cast<int>(aggs.size()) + 1 < max_levels &&
                cur.nrows > coarse_size) {
             Aggregation agg = aggregate(cur);
             if (agg.ncoarse >= cur.nrows) {
                 break; // aggregation made no progress; stop coarsening
             }
-            Level lev;
-            lev.a = sell_from_csr(cur);
-            lev.smoother.emplace(make_eq_operator<T>(cur), smoother_opt);
-            const auto n = static_cast<std::size_t>(cur.nrows);
-            const auto nc = static_cast<std::size_t>(agg.ncoarse);
-            lev.res.resize(n);
-            lev.az.resize(n);
-            lev.sm.resize(n);
-            lev.rc.resize(nc);
-            lev.ec.resize(nc);
             Csr coarse = galerkin(cur, agg);
-            lev.agg = std::move(agg);
-            levels_.push_back(std::move(lev));
+            aggs.push_back(std::move(agg));
             cur = std::move(coarse);
         }
-        coarsest_ = sell_from_csr(cur);
+        build(fine, aggs, smoother_opt);
+    }
+
+    // External hierarchy: reuse a coarsening built elsewhere — e.g. OpenFOAM's
+    // cached, high-quality GAMGAgglomeration (the amortised, faceAreaPair
+    // hierarchy). aggs[k] maps level-k cells to level-(k+1) cells; the coarse
+    // operators are the Galerkin products on that structure. This is the
+    // "reuse the trunk, own the kernels" path (ADR-0001).
+    AmgPrecond(const Csr& fine, const std::vector<Aggregation>& aggs,
+               ChebyshevOptions smoother_opt = {},
+               double coarse_tol = 1e-2, int coarse_max_iter = 500)
+        : coarse_tol_(coarse_tol), coarse_max_iter_(coarse_max_iter) {
+        build(fine, aggs, smoother_opt);
     }
 
     void apply(std::span<const double> r, std::span<double> z) const override {
@@ -133,6 +136,34 @@ private:
         for (std::size_t i = 0; i < r.size(); ++i) {
             lev.res[i] = r[i] - lev.az[i];
         }
+    }
+
+    // Assemble the level operators + smoothers from a fine operator and an
+    // ordered list of aggregations (each level's Galerkin product on the next).
+    void build(const Csr& fine, const std::vector<Aggregation>& aggs,
+               ChebyshevOptions smoother_opt) {
+        Csr cur = fine;
+        for (const Aggregation& agg : aggs) {
+            // guard a malformed external hierarchy: stop and treat cur as coarsest
+            if (static_cast<std::size_t>(cur.nrows) != agg.agg.size()) {
+                break;
+            }
+            Level lev;
+            lev.a = sell_from_csr(cur);
+            lev.smoother.emplace(make_eq_operator<T>(cur), smoother_opt);
+            const auto n = static_cast<std::size_t>(cur.nrows);
+            const auto nc = static_cast<std::size_t>(agg.ncoarse);
+            lev.res.resize(n);
+            lev.az.resize(n);
+            lev.sm.resize(n);
+            lev.rc.resize(nc);
+            lev.ec.resize(nc);
+            Csr coarse = galerkin(cur, agg);
+            lev.agg = agg;
+            levels_.push_back(std::move(lev));
+            cur = std::move(coarse);
+        }
+        coarsest_ = sell_from_csr(cur);
     }
 
     std::vector<Level> levels_; // finest .. down to one above coarsest

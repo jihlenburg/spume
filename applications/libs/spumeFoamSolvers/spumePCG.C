@@ -214,12 +214,41 @@ Foam::solverPerformance Foam::spumePCG::solve
             }
             else if (pc == "amgFP32")
             {
-                // FP32 algebraic multigrid — the M2 lever.
+                // FP32 algebraic multigrid with SPUME's own greedy coarsening.
                 precond = std::make_unique<spume::AmgPrecond<float>>(csr);
             }
             else if (pc == "amgFP64")
             {
                 precond = std::make_unique<spume::AmgPrecond<double>>(csr);
+            }
+            else if (pc == "gamgFP32" || pc == "gamgFP64")
+            {
+                // Reuse OpenFOAM's cached, high-quality GAMGAgglomeration
+                // hierarchy (amortised across all solves — it is a MeshObject),
+                // and run the SPUME FP32/FP64 Chebyshev V-cycle on it. This is
+                // the "reuse the trunk, own the kernels" path (ADR-0001).
+                const GAMGAgglomeration& gagg =
+                    GAMGAgglomeration::New(matrix_, controlDict_);
+
+                std::vector<spume::Aggregation> hierarchy;
+                hierarchy.reserve(static_cast<std::size_t>(gagg.size()));
+                for (label lev = 0; lev < gagg.size(); ++lev)
+                {
+                    const labelField& ra = gagg.restrictAddressing(lev);
+                    spume::Aggregation agg;
+                    agg.agg.assign(ra.begin(), ra.end());
+                    agg.ncoarse = static_cast<spume::index_t>(gagg.nCells(lev));
+                    hierarchy.push_back(std::move(agg));
+                }
+
+                if (pc == "gamgFP32")
+                {
+                    precond = std::make_unique<spume::AmgPrecond<float>>(csr, hierarchy);
+                }
+                else
+                {
+                    precond = std::make_unique<spume::AmgPrecond<double>>(csr, hierarchy);
+                }
             }
             else
             {
