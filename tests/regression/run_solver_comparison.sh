@@ -125,6 +125,17 @@ CASE="${1:-$ROOT/tests/regression/cases/pitzDaily-pimple}"
 REPS="${SPUME_REPS:-3}"
 WORK="${SPUME_CMP_WORK:-$ROOT/build/solver-comparison}"
 SPUME_PRECOND="${SPUME_PRECOND:-jacobi}"
+# Stock-side baseline p-solver. Two honest choices:
+#   GAMG      (default) — GAMG as a standalone solver (its own V-cycle iterates
+#             to convergence). The classic OpenFOAM pressure solver.
+#   PCG-GAMG  — PCG with GAMG as its preconditioner (both Krylov-accelerated).
+#             This is the APPLES-TO-APPLES baseline for spumePCG+gamgFP32: an
+#             outer Krylov method wrapping a GAMG V-cycle, differing from SPUME
+#             only in V-cycle precision (FP64 GaussSeidel vs FP32 Chebyshev).
+#             On ill-conditioned/stretched meshes GAMG-as-solver can stall at
+#             maxIter while PCG-GAMG converges — comparing against it is the
+#             only way to isolate the FP32-bandwidth effect from Krylov rescue.
+SPUME_BASELINE="${SPUME_BASELINE:-GAMG}"
 # reorder-tolerance equivalence-class bounds for the verdict (see header note).
 SPUME_EQUIV_RTOL="${SPUME_EQUIV_RTOL:-1e-6}"
 SPUME_EQUIV_ATOL="${SPUME_EQUIV_ATOL:-1e-6}"
@@ -164,7 +175,12 @@ esac
     exit 1
 }
 
-export ROOT ENVFILE CASE REPS WORK SPUME_PRECOND SPUME_BUILD_DIR
+case "$SPUME_BASELINE" in
+    GAMG|PCG-GAMG) ;;
+    *) echo "comparison: SPUME_BASELINE must be GAMG or PCG-GAMG, got '$SPUME_BASELINE'" >&2; exit 1;;
+esac
+
+export ROOT ENVFILE CASE REPS WORK SPUME_PRECOND SPUME_BASELINE SPUME_BUILD_DIR
 export SPUME_EQUIV_RTOL SPUME_EQUIV_ATOL
 
 # Everything below needs the OpenFOAM environment (bash: the znver5 overlay uses
@@ -236,8 +252,8 @@ solvers
     {
         solver          smoothSolver;
         smoother        symGaussSeidel;
-        tolerance       1e-9;
-        relTol          0;
+        tolerance       1e-8;
+        relTol          0.05;
     }
     "(U|k|epsilon)Final" { \$U; }
 }
@@ -251,8 +267,14 @@ EOF
 
     cp -r "$CASE" "$WORK/base-stock"
     cp -r "$CASE" "$WORK/base-spume"
-    write_fvsolution "$WORK/base-stock" GAMG     "smoother DICGaussSeidel;"
-    write_fvsolution "$WORK/base-spume" spumePCG "preconditioner DIC; spumePreconditioner $SPUME_PRECOND;"
+    # Stock side: GAMG-as-solver, or the Krylov-accelerated PCG+GAMG baseline.
+    if [ "$SPUME_BASELINE" = "PCG-GAMG" ]; then
+        write_fvsolution "$WORK/base-stock" PCG \
+            "preconditioner { preconditioner GAMG; smoother DICGaussSeidel; }"
+    else
+        write_fvsolution "$WORK/base-stock" GAMG "smoother DICGaussSeidel;"
+    fi
+    write_fvsolution "$WORK/base-spume" spumePCG "preconditioner DIC; spumePreconditioner $SPUME_PRECOND; log 1;"
     # spume side loads the SPUME solver library.
     foamDictionary -entry libs -set "(spumeFoamSolvers)" "$WORK/base-spume/system/controlDict" > /dev/null 2>&1
     for d in base-stock base-spume; do
@@ -372,7 +394,7 @@ provenance
   OMP env           : OMP_NUM_THREADS=$OMP_NUM_THREADS OMP_PROC_BIND=$OMP_PROC_BIND OMP_PLACES=$OMP_PLACES
   case              : $CASE
   timed reps        : $REPS (interleaved A/B, +1 warm-up excluded)
-  stock p-solver    : GAMG (DICGaussSeidel)
+  stock p-solver    : $([ "$SPUME_BASELINE" = "PCG-GAMG" ] && echo "PCG + GAMG-preconditioner (DICGaussSeidel) — Krylov-accelerated" || echo "GAMG-as-solver (DICGaussSeidel)")
   spume p-solver    : spumePCG (spumePreconditioner=$SPUME_PRECOND)
   equiv tolerances  : reorder-tolerance rtol=$SPUME_EQUIV_RTOL atol=$SPUME_EQUIV_ATOL
   stock binary      : $STOCK_BIN
@@ -385,7 +407,7 @@ results (median wall time, seconds; timed region = solver run only)
   ratio SPUME/stock : ${RATIO}x   (>1 means SPUME is slower)
   steal-time        : ${STEAL_PCT}% of CPU jiffies across the timed region
 
-  NOTE: spumePreconditioner=gamgFP32 reuses OpenFOAM's cached GAMGAgglomeration
+  NOTE: spumePreconditioner=gamgFP32 reuses the cached OpenFOAM GAMGAgglomeration
   hierarchy and runs the SPUME FP32 Chebyshev V-cycle on it — measured at PARITY
   with stock GAMG (~1.01x) on pitzDaily, within measurement noise. The
   self-coarsening amgFP32 is ~1.07x; weaker preconditioners (jacobi,
