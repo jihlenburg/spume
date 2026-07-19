@@ -6,6 +6,8 @@
 //   spume-bench stream [--mb M] [--reps R]      STREAM-style roofline probe
 //   spume-bench spmv   [--nx N --ny N --nz N]   SpMV GB/s vs bytes model
 //   spume-bench solve  [--nx N --ny N --nz N]   solver traffic comparison
+//   spume-bench checkasm [--nx N ...]           verify+bench dispatch variants
+//                                               (+ hardware counters if allowed)
 //   spume-bench all                             all of the above, in order
 //
 // Methodology (per AGENTS.md performance policy and ADR-0013):
@@ -43,6 +45,9 @@
 #include "core/reduce.hpp"
 #include "core/solver.hpp"
 #include "core/spmv.hpp"
+
+#include "checkasm.hpp"
+#include "perf_counters.hpp"
 
 namespace {
 
@@ -366,6 +371,84 @@ void run_spmv(spume::index_t nx, spume::index_t ny, spume::index_t nz, int reps,
     print_steal(gauge);
 }
 
+// checkasm mode: verify each SpMV dispatch variant against the portable
+// reference, then time it — the FFmpeg/checkasm discipline (ADR-0016). The
+// OpenMP SELL kernel accumulates each chunk in the SAME fixed lane order as
+// the reference, so it must match BITWISE — this is the machine check for the
+// invariant spumePCG relies on ("openmp is bit-identical to reference, pure
+// parallelisation"). Where the kernel denies hardware counters this prints the
+// honest "unavailable" line and leaves the timing model to stand.
+void run_checkasm(spume::index_t nx, spume::index_t ny, spume::index_t nz, int reps) {
+    const auto csr = spume::coo_to_csr(spume::gen::poisson7(nx, ny, nz));
+    const auto a = spume::sell_from_csr(csr);
+    const auto n = static_cast<std::size_t>(a.nrows);
+    const auto x = random_vec(n, 11);
+    std::vector<double> y_ref(n), y_omp(n);
+
+    std::printf("== checkasm: poisson7 %dx%dx%d, n=%zu, nnz=%lld ==\n", nx, ny, nz, n,
+                static_cast<long long>(a.nnz));
+
+    spume::checkasm::Case c{"spmv", n, reps, 5};
+    c.reference([&] {
+        spume::spmv(a, std::span<const double>(x), std::span<double>(y_ref),
+                    spume::Dispatch::reference);
+    });
+    // Same-precision, fixed-order reordering -> must match bitwise.
+    c.variant(
+        "openmp",
+        [&] {
+            spume::spmv(a, std::span<const double>(x), std::span<double>(y_omp),
+                        spume::Dispatch::openmp);
+        },
+        spume::checkasm::exact(y_ref, y_omp));
+    const bool ok = c.report();
+    g_sink += y_ref[n / 2] + y_omp[n / 2];
+
+    // Optional hardware-counter view of the OpenMP kernel (degrades honestly).
+    std::vector<spume::bench::CounterSpec> specs = {
+        spume::bench::cpu_cycles(), spume::bench::instructions(),
+        spume::bench::llc_read_misses(), spume::bench::dtlb_load_misses()};
+    spume::bench::CounterGroup g(specs);
+    if (g.available()) {
+        g.start();
+        for (int i = 0; i < reps; ++i) {
+            spume::spmv(a, std::span<const double>(x), std::span<double>(y_omp),
+                        spume::Dispatch::openmp);
+        }
+        g.stop();
+        g_sink += y_omp[0];
+        std::printf("  hardware counters (openmp spmv x%d, exclude_kernel):\n", reps);
+        std::uint64_t cyc = 0, llc = 0;
+        for (const auto& r : g.read()) {
+            std::printf("    %-18s %14llu%s\n", r.name.c_str(),
+                        static_cast<unsigned long long>(r.value), r.valid ? "" : "  (n/a)");
+            if (r.valid && r.name == "cpu_cycles") cyc = r.value;
+            if (r.valid && r.name == "llc_read_misses") llc = r.value;
+        }
+        if (llc > 0) {
+            // 64 B per LLC miss is one DRAM cache line on this platform; the
+            // model says spmv moves a.spmv_bytes() per pass, so a miss count
+            // far below bytes/64 means the working set was cache-resident.
+            const double measured_gb = 64.0 * static_cast<double>(llc) / 1e9;
+            const double model_gb = a.spmv_bytes() * reps / 1e9;
+            std::printf("    -> DRAM (64B*LLC-miss) %.2f GB vs model %.2f GB (%.0f%% of model traffic)\n",
+                        measured_gb, model_gb, 100.0 * measured_gb / model_gb);
+        }
+        if (cyc > 0) {
+            std::printf("    -> %.2f cycles/nonzero over %d passes\n",
+                        static_cast<double>(cyc) /
+                            (static_cast<double>(a.nnz) * reps),
+                        reps);
+        }
+    } else {
+        std::printf("  hardware counters unavailable (%s) — timing model stands (ADR-0013)\n",
+                    g.why().c_str());
+    }
+    if (!ok) {
+        std::printf("  checkasm FAILED — a dispatch variant left the correctness class\n");
+    }
+}
+
 // Per-iteration traffic models (FP64 vectors are 8n bytes; every read or
 // write of a full vector counts once — same optimistic-streaming convention
 // as the SpMV model in sell.hpp):
@@ -493,6 +576,10 @@ int main(int argc, char** argv) {
         }
         const spume::index_t d = args.nx > 0 ? args.nx : 96;
         run_solve(d, args.ny > 0 ? args.ny : d, args.nz > 0 ? args.nz : d, args.tol, peak);
+    }
+    if (args.mode == "checkasm" || args.mode == "all") {
+        const spume::index_t d = args.nx > 0 ? args.nx : 128;
+        run_checkasm(d, args.ny > 0 ? args.ny : d, args.nz > 0 ? args.nz : d, args.reps);
     }
 
     if (g_sink == 12345.6789) { // never true; forces materialization
