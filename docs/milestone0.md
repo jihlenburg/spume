@@ -54,6 +54,13 @@ kernel like SpMV can therefore legitimately report slightly *above* 100% of
 "triad" — the roofline for read-dominated streams is higher than triad's
 counted number.
 
+> **Superseded on the target hardware (2026-07-19).** The numbers below were
+> measured on a shared cloud VM (ADR-0013). The same bench has since run on the
+> primary target (Strix Halo, `halobox`): see **`docs/perf-strix-halo.md`**.
+> The mixed-precision conclusions hold and are stronger there (triad 114 GB/s,
+> SpMV at ~88% of roofline, FP32/FP64 ratio 0.626); those are now the
+> authoritative figures.
+
 ## Measured roofline (STREAM-style probe, 3 × 256 MiB, 10 reps, steal 0.00%)
 
 | kernel | GB/s (best) | CV |
