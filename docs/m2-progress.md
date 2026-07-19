@@ -105,8 +105,18 @@ parallelism (stock N MPI ranks vs spume N threads). The earlier large-case
 
 ## Open threads (don't lose these)
 
-1. **[MAIN] Implement the K-cycle (root cause found).** SPUME's AMG takes
-   ~118-190 iters where GAMG takes ~15 on real graded meshes (measured above).
+1. **[LANDED] K-cycle — SPUME's AMG now reaches GAMG-parity convergence.**
+   Implemented the bounded Notay K-cycle (`spumeKcycle`, default on). Measured on
+   pitzBig amgFP32: **172 -> 28 pressure iters, solve 14.5s -> 5.4s (2.7x)** —
+   GAMG's iteration range, with the FP32 firewall intact. Two bounds make each
+   apply cheap: skip the finest level (the outer flexible-CG already accelerates
+   it) and cap the Krylov depth to the top ~5 coarse levels (`spumeKcycleLevels`),
+   so the fan-out is a constant, not 2^numLevels. Sweep (deterministic iters):
+   V=172, K-L3=52, **K-L5=28**, K-L8=26 — L5 is the knee. Note: use amgFP32
+   (self-coarsening, ~13 levels), NOT gamgFP32 (OpenFOAM's 20-level single-pairwise
+   hierarchy makes the K-cycle fan-out too deep). Historical context below.
+
+   SPUME's AMG took ~118-190 iters where GAMG takes ~15 on real graded meshes.
    This
    precision-independent 5-10x deficit is THE M2 blocker; the 1.34x FP32 win is
    real but second-order until it closes.
