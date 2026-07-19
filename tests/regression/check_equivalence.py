@@ -37,27 +37,52 @@ _BANNER_RE = re.compile(r"^\s*/\*.*?\*/\s*", re.DOTALL)
 
 _VALID_MODES = ("bitwise", "reorder-tolerance")
 
+# Any integer or floating-point literal (incl. scientific notation). Field
+# files are whitespace/paren separated, so this cleanly isolates numeric data.
+_NUM_RE = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")
+
 
 def strip_banner(text):
     """Remove the leading OpenFOAM banner comment block, if present."""
     return _BANNER_RE.sub("", text, count=1)
 
 
-def fields_equal(a, b, mode):
+def _numbers_and_skeleton(text):
+    """Split text into its ordered numeric literals and a structure skeleton.
+
+    Every number is replaced by a placeholder, so two files whose *only*
+    difference is numeric values produce identical skeletons.
+    """
+    nums = []
+
+    def repl(m):
+        nums.append(float(m.group()))
+        return "#"
+
+    return nums, _NUM_RE.sub(repl, text)
+
+
+def fields_equal(a, b, mode, rtol=1e-6, atol=1e-9):
     """Return True iff field-file contents a and b are equal under `mode`.
 
-    a, b are bytes. `bitwise` decodes latin-1 (lossless for any byte),
-    strips the banner from both, and compares the remainder exactly.
+    a, b are bytes.
+    - `bitwise`: banner-stripped exact byte compare (M1; nothing numerically
+      changed, so identical to the byte).
+    - `reorder-tolerance`: structure must match exactly, and every numeric
+      value must agree within |x - y| <= atol + rtol*|y| (the rounding-reorder
+      equivalence class of ADR-0002). Used from M2 on, where a SPUME solver
+      differs from the reference only at reduction-ordering level.
     """
+    sa = strip_banner(a.decode("latin-1"))
+    sb = strip_banner(b.decode("latin-1"))
     if mode == "bitwise":
-        sa = strip_banner(a.decode("latin-1"))
-        sb = strip_banner(b.decode("latin-1"))
         return sa == sb
     if mode == "reorder-tolerance":
-        raise NotImplementedError(
-            "reorder-tolerance mode lands in M2 with the mixed-precision "
-            "solvers (ADR-0002); M1 is bitwise."
-        )
+        na, ska = _numbers_and_skeleton(sa)
+        nb, skb = _numbers_and_skeleton(sb)
+        if ska != skb or len(na) != len(nb):
+            return False
+        return all(abs(x - y) <= atol + rtol * abs(y) for x, y in zip(na, nb))
     raise ValueError(f"unknown comparison mode: {mode!r} (expected one of {_VALID_MODES})")
 
 
@@ -88,7 +113,7 @@ def _field_files(time_dir):
     )
 
 
-def compare_cases(case_a, case_b, mode="bitwise"):
+def compare_cases(case_a, case_b, mode="bitwise", rtol=1e-6, atol=1e-9):
     """Compare all field files in common numeric time dirs. Returns list of diffs."""
     diffs = []
     times_a, times_b = _time_dirs(case_a), _time_dirs(case_b)
@@ -109,21 +134,26 @@ def compare_cases(case_a, case_b, mode="bitwise"):
                 ba = fh.read()
             with open(os.path.join(db, f), "rb") as fh:
                 bb = fh.read()
-            if not fields_equal(ba, bb, mode):
+            if not fields_equal(ba, bb, mode, rtol, atol):
                 diffs.append(f"time {t}: field {f} differs")
     return diffs
 
 
 def main(argv):
     args = [a for a in argv[1:] if not a.startswith("--")]
-    mode = "bitwise"
+    mode, rtol, atol = "bitwise", 1e-6, 1e-9
     for a in argv[1:]:
         if a.startswith("--mode="):
             mode = a.split("=", 1)[1]
+        elif a.startswith("--rtol="):
+            rtol = float(a.split("=", 1)[1])
+        elif a.startswith("--atol="):
+            atol = float(a.split("=", 1)[1])
     if len(args) != 2:
-        print("usage: check_equivalence.py <caseA> <caseB> [--mode=bitwise]", file=sys.stderr)
+        print("usage: check_equivalence.py <caseA> <caseB> "
+              "[--mode=bitwise|reorder-tolerance] [--rtol=1e-6] [--atol=1e-9]", file=sys.stderr)
         return 2
-    diffs = compare_cases(args[0], args[1], mode)
+    diffs = compare_cases(args[0], args[1], mode, rtol, atol)
     if diffs:
         print(f"equivalence FAIL ({mode}):", file=sys.stderr)
         for d in diffs:

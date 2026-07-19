@@ -39,13 +39,47 @@ class FieldsEqual(unittest.TestCase):
         b = (BANNER + "1.1\n").encode()
         self.assertFalse(ce.fields_equal(a, b, "bitwise"))
 
-    def test_reorder_tolerance_is_stub(self):
-        with self.assertRaises(NotImplementedError):
-            ce.fields_equal(b"a", b"b", "reorder-tolerance")
-
     def test_unknown_mode_raises(self):
         with self.assertRaises(ValueError):
             ce.fields_equal(b"a", b"b", "nonsense")
+
+
+def _field(values, bc="zeroGradient"):
+    """Minimal OpenFOAM ascii scalar field with the given internal values."""
+    body = "\n".join(str(v) for v in values)
+    return (
+        BANNER
+        + "FoamFile\n{\n    class volScalarField;\n    object p;\n}\n"
+        + "dimensions [0 2 -2 0 0 0 0];\n"
+        + f"internalField nonuniform List<scalar>\n{len(values)}\n(\n{body}\n)\n;\n"
+        + "boundaryField\n{\n    inlet { type " + bc + "; }\n}\n"
+    ).encode()
+
+
+class ReorderTolerance(unittest.TestCase):
+    def test_identical_passes(self):
+        a = _field([1.0, 2.0, 3.0])
+        self.assertTrue(ce.fields_equal(a, a, "reorder-tolerance"))
+
+    def test_within_tolerance_passes(self):
+        a = _field([1.0, 2.0, 3.0])
+        b = _field([1.0, 2.0 + 2e-8, 3.0])  # ~1e-8 relative, under default rtol 1e-6
+        self.assertTrue(ce.fields_equal(a, b, "reorder-tolerance"))
+
+    def test_out_of_tolerance_fails(self):
+        a = _field([1.0, 2.0, 3.0])
+        b = _field([1.0, 2.02, 3.0])  # 1e-2 relative, well over tolerance
+        self.assertFalse(ce.fields_equal(a, b, "reorder-tolerance"))
+
+    def test_structural_difference_fails_even_within_tol(self):
+        a = _field([1.0, 2.0, 3.0], bc="zeroGradient")
+        b = _field([1.0, 2.0, 3.0], bc="fixedValue")  # same numbers, different structure
+        self.assertFalse(ce.fields_equal(a, b, "reorder-tolerance"))
+
+    def test_different_value_count_fails(self):
+        a = _field([1.0, 2.0, 3.0])
+        b = _field([1.0, 2.0])
+        self.assertFalse(ce.fields_equal(a, b, "reorder-tolerance"))
 
 
 class ResidualLines(unittest.TestCase):
