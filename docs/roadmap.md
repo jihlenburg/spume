@@ -65,6 +65,31 @@ identical hardware.
 DoD: the demo container runs from a clean pull; results write-up in
 docs/. This milestone gates everything strategic.
 
+**Progress (2026-07-19) + direction sharpened by measurement** (see ADR-0017,
+memory m3-gpu-bandwidth-validated):
+- Premise validated: iGPU gfx1151 = 240 GB/s (94% of the 256 GB/s LPDDR5X),
+  ~2x the fabric-walled CPU (~150). Phase 1 (SELL SpMV 208 GB/s = 1.67x CPU,
+  verified) and Phase 2 (full 15-level GPU-resident V-cycle + FCG, iteration
+  parity 25==25 with CPU, independently verified) DONE. Prototypes preserved in
+  ~/spume-m3-gpu-prototypes/ (build with -fopenmp at link; hipMallocManaged only).
+- **Go all-in GPU-resident, do NOT split bandwidth-bound work across engines.**
+  Measured: concurrent CPU+GPU aggregate = 189 GB/s < GPU-alone 240 — the shared
+  controller is a ceiling, not a sum; concurrency contends and both slow. The GPU
+  alone already extracts 94%. So "staggered CPU/GPU scheduling" (above) means
+  partition by MEMORY-RESIDENCY: coarse levels (cache-resident, launch-latency-
+  bound on GPU) on the CPU concurrent with the fine bandwidth-bound levels on the
+  GPU — never two engines on DRAM at once.
+- SSD (PCIe Gen4 x4 ~7 GB/s) maps into GPU address space for free (GPU global
+  pool IS the 32GB system RAM, fine-grained coherent — no discrete-GPU GDS
+  bounce), but at 34x below memory bandwidth it is a WARM-START / out-of-core
+  lever (precomputed hierarchy + JIT-kernel load), not a solve-bandwidth lever.
+- NPU (XDNA2, /dev/accel/accel0, amdxdna loaded) is a dense bf16/INT8 matmul
+  engine — parked for a dense-in-SRAM low-precision branch, not sparse SpMV.
+- Phase 3 (next): GPU perf pass (fuse CG reductions, batch coarse kernels, drop
+  per-iter sync) + rocprof roofline on a large mesh; port the K-cycle to GPU;
+  productionize into src/backends/gpu/ behind cell-count fallback; then the
+  heterogeneous coarse-on-CPU / fine-on-GPU split.
+
 ## M4 — Explicit engine showcase (ADR-0010)
 
 LBM and artificial-compressibility engines from the same IR for eligible
