@@ -28,6 +28,7 @@ if(SPUME_MARCH_NATIVE)
 endif()
 
 add_subdirectory(src/core)
+add_subdirectory(src/bridge)
 
 if(SPUME_BUILD_TESTS)
     enable_testing()
