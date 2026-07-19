@@ -85,9 +85,15 @@ memory m3-gpu-bandwidth-validated):
   lever (precomputed hierarchy + JIT-kernel load), not a solve-bandwidth lever.
 - NPU (XDNA2, /dev/accel/accel0, amdxdna loaded) is a dense bf16/INT8 matmul
   engine — parked for a dense-in-SRAM low-precision branch, not sparse SpMV.
-- Phase 3 (next): GPU perf pass (fuse CG reductions, batch coarse kernels, drop
-  per-iter sync) + rocprof roofline on a large mesh; port the K-cycle to GPU;
-  productionize into src/backends/gpu/ behind cell-count fallback; then the
+- Phase 3 (in progress): the GPU SELL-C-8 FP64 SpMV is productionized into
+  `src/backends/gpu/` (ADR-0017) behind the `SPUME_ENABLE_HIP` build guard, with
+  a HIP-free host API and a verify-then-bench ctest (`gpu-spmv-check`, skips
+  cleanly with no GPU). Measured on gfx1151 (poisson7 128³): **207 GB/s = 81% of
+  the 256 GB/s LPDDR5X peak, bitwise-exact vs the CPU reference, 8.3x a
+  single-core reference SpMV.** Remaining: port the FP32 Chebyshev smoother and
+  K-cycle to `src/backends/gpu/`; keep the solve GPU-resident (fuse CG
+  reductions, batch coarse kernels, drop per-iter sync); wire the cell-count
+  fallback; rocprof roofline once the profiler is installed; then the
   heterogeneous coarse-on-CPU / fine-on-GPU split.
 
 ## M4 — Explicit engine showcase (ADR-0010)

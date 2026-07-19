@@ -14,6 +14,8 @@ option(SPUME_MARCH_NATIVE "Tune generated code for the build machine" OFF)
 option(SPUME_BUILD_TESTS "Build the SPUME test suite" ON)
 option(SPUME_BUILD_BENCH "Build the SPUME bench harness" ON)
 option(SPUME_WITH_OPENFOAM "Enable contract tests against a built OpenFOAM tree" OFF)
+option(SPUME_ENABLE_HIP "Build the HIP GPU backend (requires ROCm, ADR-0017)" OFF)
+set(SPUME_HIP_ARCH "gfx1151" CACHE STRING "GPU architecture(s) for the HIP backend")
 
 find_package(OpenMP REQUIRED COMPONENTS CXX)
 
@@ -27,11 +29,22 @@ if(SPUME_MARCH_NATIVE)
     target_compile_options(spume-arch INTERFACE -march=native)
 endif()
 
+# Enable testing before any subdirectory registers tests (add_test only takes
+# effect after enable_testing()).
+if(SPUME_BUILD_TESTS)
+    enable_testing()
+endif()
+
 add_subdirectory(src/core)
 add_subdirectory(src/bridge)
 
+if(SPUME_ENABLE_HIP)
+    enable_language(HIP)
+    set(CMAKE_HIP_STANDARD 20)
+    add_subdirectory(src/backends/gpu)
+endif()
+
 if(SPUME_BUILD_TESTS)
-    enable_testing()
     add_subdirectory(tests)
 endif()
 
