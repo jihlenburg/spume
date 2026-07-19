@@ -86,8 +86,41 @@ requires a secret):**
 
 ## Bitwise equivalence (proxy cases)
 
-_Filled in by the equivalence harness — see below._
+`spumePimpleFoam` runs the reference solvers unchanged in M1, so on the same
+case with the same (serial) decomposition it must be **byte-identical** to
+stock `pimpleFoam` — a stronger anchor than the rounding-reorder tolerance the
+numerics policy uses once SPUME numerics actually diverge (that arrives in M2).
+
+The oracle is `tests/regression/check_equivalence.py` (banner-stripped byte
+compare across every written time directory + identical `Solving for …`
+residual/iteration lines), driven by `tests/regression/run_equivalence_pimple.sh`
+over the checked-in fixtures. Verified locally against the v2606 install:
+
+| Fixture | Mesh | Steps written | Residual lines | Verdict |
+|---------|------|---------------|----------------|---------|
+| `pitzDaily-pimple` | blockMesh (2D step) | 2 (+t0) | 60 = 60 | bitwise-identical |
+| `TJunction-pimple` | blockMesh (T-junction) | 2 (+t0) | matched | bitwise-identical |
+
+The comparator is a real gate, not a rubber stamp: perturbing a single byte in
+a written field flips it to FAIL, and restoring it flips it back to PASS. It
+carries a `mode` (`bitwise` now; `reorder-tolerance` stub for M2), so the same
+oracle becomes M2's mixed-precision regression gate.
+
+Wired into CI: the pure-Python comparator self-test runs on every push
+(`ctest --preset all`); the OpenFOAM-dependent equivalence gate
+(`spume-equivalence-pimple`, label `equivalence`) runs in the nightly
+`contract-vendored` job under `-DSPUME_WITH_OPENFOAM=ON`.
 
 ## motorBike headline run
 
-_Filled in by the local motorBike run — see below._
+The milestone headline and the seed of the M3 flagship baseline: a **transient
+pimpleFoam** configuration of the v2606 motorBike case (the leaf mirrors
+`pimpleFoam`, so the comparison is against stock `pimpleFoam`, not the steady
+`simpleFoam` tutorial — and transient external aero is exactly M3's demo).
+
+- Mesh: `snappyHexMesh` (6-rank parallel) reconstructed to a serial mesh — **353,830 cells**.
+- Both solvers run serially, two fixed 1e-4 s steps, kOmegaSST RAS, ascii fields.
+- Result: **bitwise-identical**. Solver exit 0/0; 14 `Solving for …` lines identical; every field at every written time directory byte-for-byte equal (e.g. the 10.3 MB `0.0002/U`). Negative control (1-byte perturbation) correctly fails.
+
+The motorBike case is run locally (it needs `snappyHexMesh`); its case data is
+not committed (CLAUDE.md). This closes M1 DoD item 1 at the strongest bar.

@@ -16,7 +16,7 @@ DoD: all CMake presets build warnings-as-errors; unit + determinism +
 mixed-vs-FP64 equivalence tests green in CI; docs/milestone0.md contains
 a measured GB/s table on the dev machine.
 
-## M1 — Vendoring, shim, contract tests
+## M1 — Vendoring, shim, contract tests — **complete (2026-07-19)**
 
 Vendor an OpenFOAM release under vendor/, patch-stack tooling (budget
 2,000 lines), src/compat shim, contract suite (LDU addressing, GAMG
@@ -25,6 +25,19 @@ dev, first leaf application (spumePimpleFoam) running reference solvers.
 
 DoD: motorBike tutorial runs through the leaf app bit-class-identical to
 stock; contract suite green; one dry-run upstream rebase documented.
+
+Outcome (see docs/milestone1.md):
+- Leaf app + `src/compat` shim build against v2606 (warnings-as-errors, clean).
+- `spumePimpleFoam` is **bitwise-identical** to stock `pimpleFoam` — stronger
+  than the required bit-class bar — on motorBike (353,830 cells, transient,
+  the M3 flagship class) and on the `pitzDaily`/`TJunction` proxy fixtures now
+  gating in nightly CI via a reusable comparator (`bitwise` now,
+  `reorder-tolerance` stub for M2).
+- Contract suite green (unchanged).
+- Rebase dry-run: patch stack empty (0/2000 budget), so replay is trivially
+  clean; the develop build+contract step is **blocked** — develop.openfoam.com
+  now requires auth (HTTP 401 for anonymous clone), which also breaks the
+  nightly canary's anonymous clone. Documented with a token-based fix.
 
 ## M2 — CPU performance path
 
