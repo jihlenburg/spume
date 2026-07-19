@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "core/equilibrate.hpp"
+#include "core/fused_spmv.hpp"
 #include "core/spmv.hpp"
 #include "core/types.hpp"
 #include "core/vecops.hpp"
@@ -103,7 +104,6 @@ public:
         wr_.resize(n);
         wx_.resize(n);
         wd_.resize(n);
-        wt_.resize(n);
     }
 
     void apply(std::span<const double> r, std::span<double> z) const override {
@@ -136,9 +136,9 @@ public:
             if (k + 1 == opt_.steps) {
                 break; // last correction applied; r/d updates would be dead
             }
-            // r_{k+1} = r_k - A d_k
-            spmv(op_.a, std::span<const T>(wd_), std::span<T>(wt_), dispatch_);
-            axpy(T{-1}, std::span<const T>(wt_), std::span<T>(wr_), dispatch_);
+            // r_{k+1} = r_k - A d_k (fused: A d_k is never materialised, so two
+            // vector passes per step disappear — see core/fused_spmv.hpp)
+            spmv_axpy(op_.a, T{-1}, std::span<const T>(wd_), std::span<T>(wr_), dispatch_);
             // d_{k+1} = rho_{k+1} rho_k d_k + (2 rho_{k+1}/delta) r_{k+1}
             const double rho_new = 1.0 / (2.0 * sigma1 - rho);
             axpby(static_cast<T>(2.0 * rho_new / delta), std::span<const T>(wr_),
@@ -158,7 +158,7 @@ private:
     EqOperator<T> op_;
     ChebyshevOptions opt_;
     Dispatch dispatch_;
-    mutable std::vector<T> wr_, wx_, wd_, wt_;
+    mutable std::vector<T> wr_, wx_, wd_;
 };
 
 } // namespace spume
