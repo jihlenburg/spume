@@ -14,6 +14,40 @@ M1 (done) -> **M2 (here): FP32-GAMG-under-FP64-Krylov** -> M3 (GPU flagship).
 The single question M2 must answer: **does SPUME's mixed-precision multigrid
 beat a tuned stock GAMG on a large case?**
 
+## M2 ANSWER (arc closed 2026-07-19, pitzBig 1.48M cells, isolated benchmark)
+
+**Convergence: SPUME wins.** amgFP32 + K-cycle does ~½ the pressure iterations
+of stock GAMG (25 vs 50 avg) and is far more stable (stock swings 17->79; SPUME
+holds 22-29). The K-cycle turned a start-of-M2 5-10x deficit into a 2x lead.
+
+**Wall-time: parity.** Isolated per-timestep solve cost (marginal method, fixed
+startup removed): stock GAMG (serial) 13.64s vs SPUME amgFP32+K (16 threads)
+12.89s = **0.95x, SPUME 5% faster**. Caveats: (1) 16-thread vs 1-core — at
+matched parallelism (stock N-rank MPI) stock may lead; (2) SPUME's 2x iteration
+lead is eaten by per-iteration K-cycle fan-out cost + a ~985ms/solve setup
+rebuild. So SPUME has *caught* GAMG (better convergence, wall-time parity) but
+not decisively won on wall-clock.
+
+**Why not a wall-time win, and the CPU ceiling:** measured DRAM ceiling is
+CPU-fabric-limited to ~150 GB/s (59% of the 256 GB/s LPDDR5X theoretical; NT
+stores recover a 1.33x write-allocate factor; SMT halves it — pin 16 cores).
+The iGPU reaches far more of the 256 GB/s. So the CPU is bandwidth-capped and
+kernel micro-opts (NT-store measured 1.04x on read-dominated SpMV; block-SpMM
+needs multiple RHS; s-step is complex) are marginal. The decisive bandwidth win
+is M3/GPU.
+
+**Amortization landed:** aggregation structure cached, operators rebuilt fresh
+each solve (setup 1575->985ms), convergence stable across timesteps. Remaining
+CPU lever, MEASURED and DEFERRED: the Galerkin coarse-operator build is 83% of
+the ~985ms setup (coo_to_csr sort); caching its sparsity pattern (scatter-add
+values, skip sort) -> ~350ms setup -> ~16% wall-time lead. Ready to implement,
+but deferred as low-value on a fabric-walled CPU vs the M3 bandwidth opportunity.
+
+**-> Moving to M3 (GPU/NPU).** Everything M2 proved feeds it: the FP32 firewall
+(convergence-neutral), the K-cycle (Chebyshev-smoothed = GPU-mappable, no
+Gauss-Seidel), coefficient-only updates (matches M3's zero-copy design), and the
+2x bandwidth headroom on the iGPU.
+
 ## Landed (main)
 
 - **Solver seam** — `spumePCG` (runtime-selectable `lduMatrix::solver`, zero
