@@ -3,6 +3,7 @@
 
 add_library(spume-core STATIC
     amg.cpp
+    reorder.cpp
     formats.cpp
     poisson.cpp
     reduce.cpp
