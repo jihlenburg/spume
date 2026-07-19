@@ -113,3 +113,47 @@ judged against.
 - The `ldu_to_sell` bridge must preserve the LDU sign convention
   (OpenFOAM stores `-` off-diagonals for the discretised Laplacian); the unit
   test pins this with a hand-computed product so a sign error can't pass.
+
+## Stage 1 implementation notes (discovered 2026-07-19)
+
+Building Stages 0 (done, merged-ready) surfaced three concrete requirements for
+Stage 1 that were not obvious up front. Recording them so Stage 1 is a
+de-risked, well-scoped next task.
+
+1. **Convergence tolerance dominates, not machine rounding.** Two *different*
+   Krylov solvers (M0 CG vs upstream PCG) stopped at a loose `relTol` (the
+   pitzDaily fixture uses `relTol 0.01` for `p`) converge to each other only at
+   the ~`relTol` level — their fields differ ~1%, which `reorder-tolerance`
+   (rtol 1e-6) correctly rejects. The Stage-1 gate must therefore drive **both**
+   ref and test to **tight** convergence (`relTol 0`, `tolerance 1e-9`) via the
+   `foamDictionary` overrides in `run_spumepcg_equivalence.sh`, so both reach
+   the same true linear solution and the fields then agree at the tolerance
+   floor (~1e-8), well inside `reorder-tolerance`. This is a harness change, not
+   a change to any default. `run_spumepcg_equivalence.sh` already parametrises
+   the solver override — add the tight-tolerance override for the Stage-1 run.
+
+2. **Cross-build-system linkage.** `libspumeFoamSolvers` (wmake) must reach
+   `spume::assemble_sell` + `spume::cg` (CMake `spume-bridge`/`spume-core`).
+   Two viable routes: (a) compile the required core+bridge `.cpp` **into** the
+   wmake library via `Make/files` (self-contained, no path coupling — preferred
+   for a runtime-loaded plugin), or (b) link the CMake-built static libs from
+   `build/<preset>/src/{core,bridge}` (needs a build-dir variable from
+   `foam-env.sh`; the nightly job already builds them before ctest). Either way
+   the wmake TU that includes `bridge/ldu_to_sell.hpp` needs **C++20**
+   (`std::span`); append `-std=c++2a` in `Make/options` (last `-std` wins over
+   wmake's default `-std=c++17`), plus `-fopenmp` for the core's OpenMP paths.
+
+3. **Interface guard.** `assemble_sell` captures only `diag`/`upper`/`lower`;
+   OpenFOAM's `Amul` also adds **coupled-interface** contributions
+   (processor/cyclic patches) via `interfaceBouCoeffs_`/`interfaceIntCoeffs_`.
+   Serial single-region cases (pitzDaily) have no active coupled interfaces, so
+   the bridged operator is complete. Stage 1 must **detect active coupled
+   interfaces and delegate to the reference PCG** in that case (a correctness
+   fallback, consistent with ADR-0004's reference-default) until halo coupling
+   is handled in a later M2 slice. Guard on whether any `interfaces_` entry is a
+   coupled interface with non-zero boundary coefficients.
+
+Stage 1 status: **not implemented in the 2026-07-19 session** — stopped at the
+verified Stage-0 boundary rather than commit unverified numerics. Tasks 1–4
+(comparator mode, LDU shim, `ldu_to_sell` bridge, spumePCG Stage-0 passthrough)
+are complete and tested.
