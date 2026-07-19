@@ -73,16 +73,24 @@ That step will now fail at clone with the same 401. This is a real,
 independently-useful finding: the merge-canary is broken on the upstream
 access-policy change, not on a code invariant.
 
-**Recommendation (needs maintainer action — not done autonomously because it
-requires a secret):**
+**Resolution — point the canary at the public mirror (no token).** The ESI
+OpenFOAM sources are mirrored publicly under the `gitlab.com/openfoam` group at
+`gitlab.com/openfoam/core/openfoam`, which carries the same v2606 lineage (the
+`OpenFOAM-2606-rc*` branches) and exposes `develop` for anonymous clone. The
+nightly canary now clones that mirror instead of the auth-walled
+`develop.openfoam.com`, so **no `OPENFOAM_GITLAB_TOKEN` secret is needed**:
 
-1. Register a read-only ESI GitLab deploy token and expose it to the nightly
-   job as a secret, cloning with
-   `https://gitlab-ci-token:${{ secrets.ESI_OF_TOKEN }}@develop.openfoam.com/...`.
-2. Re-run the `develop` build + contract to complete this dry-run; append the
-   apply-clean / budget / contract-green results here.
-3. Until then, the vendored-tree contract job (`contract-vendored`) still
-   exercises the full suite against v2606.
+```yaml
+git clone --depth 1 --branch develop \
+  https://gitlab.com/openfoam/core/openfoam.git upstream-develop
+```
+
+The `develop` build + contract step of this dry-run therefore runs on the next
+scheduled nightly (or `workflow_dispatch`); its apply-clean / budget /
+contract-green result should be appended here from that run — it is not
+reported now because it was not executed in this session (never fabricated,
+ADR-0013). The vendored-tree contract job (`contract-vendored`) already
+exercises the full suite against v2606 every night.
 
 ## Bitwise equivalence (proxy cases)
 

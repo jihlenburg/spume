@@ -35,9 +35,11 @@ Outcome (see docs/milestone1.md):
   `reorder-tolerance` stub for M2).
 - Contract suite green (unchanged).
 - Rebase dry-run: patch stack empty (0/2000 budget), so replay is trivially
-  clean; the develop build+contract step is **blocked** — develop.openfoam.com
-  now requires auth (HTTP 401 for anonymous clone), which also breaks the
-  nightly canary's anonymous clone. Documented with a token-based fix.
+  clean; the develop build+contract step could not run here because
+  develop.openfoam.com now requires auth (HTTP 401 for anonymous clone). The
+  nightly canary is repointed at the public `gitlab.com/openfoam/core/openfoam`
+  mirror (same v2606 lineage, anonymous clone, no token), so it runs on the
+  next scheduled nightly.
 
 ## M2 — CPU performance path
 
