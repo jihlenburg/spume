@@ -26,3 +26,4 @@ one-line entry in the index below.
 | 0014 | Upstream baseline: OpenFOAM v2606, pruned    | Accepted |
 | 0015 | Local Strix Halo is the performance reference| Accepted |
 | 0016 | Inline asm permitted as pluggable backends   | Accepted |
+| 0017 | GPU backend: HIP, unified memory, verified in-class | Accepted |
