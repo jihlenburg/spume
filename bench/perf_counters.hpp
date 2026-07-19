@@ -45,11 +45,13 @@ struct CounterSpec {
     std::uint64_t config;
 };
 
-// A named result: the label and the raw count over the measured region.
+// A named result: the label and the count over the measured region, scaled up
+// for any PMU time-multiplexing (see read()).
 struct CounterResult {
     std::string name;
     std::uint64_t value = 0;
-    bool valid = false; // false if this event could not be scheduled/read
+    bool valid = false;  // false if this event could not be scheduled/read
+    bool scaled = false; // true if value was scaled for multiplexing (running < enabled)
 };
 
 // Portable event constructors — the architectural encodings the kernel maps
@@ -112,8 +114,10 @@ inline CounterSpec raw(const std::string& name, std::uint64_t config) {
 
 // A group of counters measured over one region. Open once, then wrap the
 // timed region in start()/stop() and read(). All events share the leader's
-// scheduling so their counts are mutually consistent (no multiplexing skew
-// within the group's hardware-slot budget).
+// scheduling so their counts are mutually consistent. If the group exceeds the
+// PMU's hardware slots the kernel time-multiplexes it; read() detects this via
+// the enabled/running times and scales each count up to its full-time estimate
+// (never silently reporting a partial count as if fully measured).
 //
 // Lifetime: RAII — the fds close on destruction. Non-copyable; move is not
 // needed for the bench's single-region use.
@@ -172,7 +176,10 @@ public:
 
     // Read the counts accumulated between start() and stop(). One result per
     // requested spec, in order; results[i].valid is false for any event the
-    // kernel could not schedule (leaving the timing model to cover it).
+    // kernel could not schedule (leaving the timing model to cover it). Each
+    // count is scaled by enabled/running to correct PMU time-multiplexing, so a
+    // partially-scheduled event is reported at its full-time estimate (with
+    // .scaled = true), never as an unscaled undercount.
     std::vector<CounterResult> read() const {
         std::vector<CounterResult> out;
         out.reserve(specs_.size());
@@ -181,11 +188,33 @@ public:
             CounterResult r;
             r.name = specs_[i].name;
             if (i < fds_.size() && fds_[i] >= 0) {
-                std::uint64_t v = 0;
-                const ssize_t n = ::read(fds_[i], &v, sizeof(v));
-                if (n == static_cast<ssize_t>(sizeof(v))) {
-                    r.value = v;
-                    r.valid = true;
+                // read_format (no GROUP) yields: value, time_enabled, time_running.
+                std::uint64_t buf[3] = {0, 0, 0};
+                const ssize_t n = ::read(fds_[i], buf, sizeof(buf));
+                if (n == static_cast<ssize_t>(sizeof(buf))) {
+                    const std::uint64_t value = buf[0];
+                    const std::uint64_t enabled = buf[1];
+                    const std::uint64_t running = buf[2];
+                    if (running > 0) {
+                        // running < enabled means the PMU only scheduled this
+                        // event part of the region; the raw count is that
+                        // fraction of the truth. Scale up so an under-count
+                        // cannot masquerade as fully measured. The ratio is ~1-2
+                        // and value ~1e10, so long double keeps the estimate
+                        // exact well past any real count (and never overflows).
+                        std::uint64_t v = value;
+                        if (running < enabled) {
+                            const long double ratio =
+                                static_cast<long double>(enabled) /
+                                static_cast<long double>(running);
+                            v = static_cast<std::uint64_t>(
+                                static_cast<long double>(value) * ratio);
+                            r.scaled = true;
+                        }
+                        r.value = v;
+                        r.valid = true;
+                    }
+                    // running == 0: event never scheduled — leave invalid.
                 }
             }
             out.push_back(std::move(r));
@@ -215,6 +244,10 @@ private:
             attr.disabled = (i == 0) ? 1 : 0; // leader starts disabled
             attr.exclude_kernel = 1;          // user-space work only
             attr.exclude_hv = 1;
+            // Report time_enabled/time_running so read() can detect and correct
+            // PMU time-multiplexing rather than under-report a partial count.
+            attr.read_format = PERF_FORMAT_TOTAL_TIME_ENABLED |
+                               PERF_FORMAT_TOTAL_TIME_RUNNING;
             const long fd = perf_open(&attr, leader);
             if (fd < 0) {
                 if (i == 0) {
