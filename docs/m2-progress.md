@@ -224,21 +224,30 @@ apps, bench harness, tests). Landed fixes:
   is verified to strictly accelerate the V-cycle on a graded operator (via a
   stationary iteration, unmasked by the outer Krylov) — `poisson7_graded` added.
 
-Deferred (need a harness this session lacked — recorded so they are not lost):
+Now closed (2026-07-20), each with verification:
 
-7. **[CORE, perf] Thread `cycle()`'s restriction/prolongation/residual.** These
-   run serial even under `Dispatch::openmp`, an Amdahl tax on the finest arrays.
-   The prolongation gather and residual subtraction are trivially parallel (and
-   determinism-safe: each writes a distinct index). DEFERRED as a *performance*
-   change: the performance policy requires counter evidence, which needs a
-   measured pass on halobox — do not ship it unmeasured.
-8. **[APP] `spumePCG` ignores `relTol`.** The inner FCG converges on
-   `||r|| <= tol·||b||` only; `relTol_` is never applied and the residual norm
-   differs from OpenFOAM's `solverPerformance` contract (over-solves `relTol`-
-   driven PIMPLE correctors). Fix needs validation on a real case (matched
-   stopping semantics), not a compile check — needs the OpenFOAM env.
-9. **[APP] AMG hierarchy cache is unsafe on dynamic meshes.** `g_amgCache` keys
-   on `&lduAddr()` + cell count; a reallocated addressing at the same address
-   with unchanged ncells (AMR/topo change on the `createDynamicFvMesh` flagship)
-   can false-hit and reuse a stale aggregation. Fold a topology-change signal
-   into the key; verify on a dynamic-mesh tutorial (needs the OpenFOAM env).
+7. **[CORE, perf] `cycle()` restriction/prolongation/residual threaded.** The
+   prolongation gather, residual subtraction, and post-smooth accumulation now
+   run under OpenMP (`if(dispatch==openmp)`); the restriction scatter-add stays
+   serial (parallelising it determinism-safe would need per-thread partials —
+   not worth it). Determinism-safe (each writes a distinct index) — the AMG
+   determinism regression still passes across 1/4/16 threads. Measured on
+   poisson7 96³ at 16 cores (isolated `apply()` A/B): **27.6 ms threaded vs
+   29.0 ms serial ≈ 1.05x**. Honest and modest — the apply is dominated by the
+   already-threaded SpMVs and Chebyshev smoother; the serial passes were a small
+   Amdahl tax, and the restriction scatter-add is the remaining serial pass.
+8. **[APP] `spumePCG` now honours `relTol` and `minIter`.** Added `rel_tol` and
+   `min_iter` to `SolveOptions`; `cg`/`fcg` stop at `max(tol, rel_tol*initial
+   relres)` after at least `min_iter` iterations, mirroring OpenFOAM's
+   `max(tolerance, relTol*initialResidual)`. `spumePCG` passes `relTol_`/
+   `minIter_` through. Verified on pitzDaily (pimpleFoam, amgFP32): corrector-1
+   pressure iterations **270 -> 54 (5x)** when its relTol goes 0 -> 0.05, while
+   the `pFinal` control (relTol 0 in both) is unchanged (263 vs 260) — the
+   over-solving is gone and only the relTol path moved.
+9. **[APP] AMG hierarchy cache keyed on a topology hash.** Replaced the unsafe
+   `&lduAddr()`-pointer key with an FNV-1a hash of the LDU addressing
+   (lower/upper + ncells): any topology change alters the sparsity hash and
+   forces a rebuild, closing the AMR/same-address false-hit. Verified on
+   pitzDaily: setup drops 10.1 ms (build) -> ~6.1 ms (hit) and stays there for
+   all timesteps — the static mesh still caches (no regression), and the hash is
+   stable across solves.
