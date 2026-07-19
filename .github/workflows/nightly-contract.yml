@@ -46,8 +46,8 @@ jobs:
         run: cmake --preset cpu-release -DSPUME_WITH_OPENFOAM=ON
       - name: Build
         run: cmake --build --preset cpu-release
-      - name: Contract tests
-        run: ctest --test-dir build/cpu-release -L contract --output-on-failure
+      - name: Contract and equivalence tests
+        run: ctest --test-dir build/cpu-release -L 'contract|equivalence' --output-on-failure
 
   contract-upstream-develop:
     name: merge canary (upstream develop)
