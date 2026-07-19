@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <vector>
@@ -61,20 +62,55 @@ bool hasCoupledInterface(const lduInterfaceFieldPtrsList& interfaces)
 // transient run as the coefficients drift (measured: 28 -> 900 iters by
 // timestep 3), which is exactly what this must not do.
 //
-// Single entry, keyed on the lduAddressing pointer (owned by the mesh, stable
-// for a static mesh) plus cell count and preconditioner name. The pressure solve
-// runs serially within PIMPLE and each MPI rank is its own process, so a
+// Single entry, keyed on a hash of the LDU addressing (the sparsity/topology
+// fingerprint) plus cell count and preconditioner name. Keying on the
+// lduAddressing POINTER is unsafe on a dynamic mesh: a topology change
+// (AMR/refinement on createDynamicFvMesh) can free and reallocate the addressing
+// at the same address with an unchanged cell count, which a pointer+ncells key
+// would false-hit and reuse a stale aggregation. Hashing the addressing content
+// invalidates the cache on any topology change; the O(nFaces) hash is negligible
+// beside the aggregation graph traversal it guards. The pressure solve runs
+// serially within PIMPLE and each MPI rank is its own process, so a
 // process-static cache needs no locking. The cached aggregations own their data
 // (no references into OpenFOAM), so they safely outlive the transient solver.
 struct AmgHierarchyCache
 {
-    const void* key = nullptr;
     Foam::label ncells = -1;
     Foam::word name;
+    std::uint64_t topo = 0;               // FNV-1a hash of the LDU addressing
     std::vector<spume::Aggregation> aggs; // cached STRUCTURE (topology, static)
     bool valid = false;
 };
 AmgHierarchyCache g_amgCache;
+
+//- FNV-1a hash of the LDU addressing (lower/upper) + cell count. Two meshes
+// with the same sparsity hash to the same value; any topology change (different
+// face connectivity or count) changes it, forcing a hierarchy rebuild.
+std::uint64_t hashAddressing
+(
+    const Foam::labelUList& lowerAddr,
+    const Foam::labelUList& upperAddr,
+    const Foam::label nCells
+)
+{
+    std::uint64_t h = 1469598103934665603ULL; // FNV-1a offset basis
+    auto mix = [&h](std::uint64_t v)
+    {
+        h ^= v;
+        h *= 1099511628211ULL; // FNV-1a prime
+    };
+    mix(static_cast<std::uint64_t>(nCells));
+    mix(static_cast<std::uint64_t>(lowerAddr.size()));
+    forAll(lowerAddr, i)
+    {
+        mix(static_cast<std::uint64_t>(lowerAddr[i]));
+    }
+    forAll(upperAddr, i)
+    {
+        mix(static_cast<std::uint64_t>(upperAddr[i]));
+    }
+    return h;
+}
 
 } // End anonymous namespace
 } // End namespace Foam
@@ -183,10 +219,18 @@ Foam::solverPerformance Foam::spumePCG::solve
     {
         spume::SolveOptions opt;
         opt.tol = static_cast<double>(tolerance_);
+        // Honour the case's relTol and minIter so the stop matches OpenFOAM's
+        // solverPerformance contract, max(tolerance, relTol*initialResidual):
+        // without relTol the inner solve over-solves every relTol-driven PIMPLE
+        // corrector down to the absolute tolerance.
+        opt.rel_tol = static_cast<double>(relTol_);
+        opt.min_iter = static_cast<int>(minIter_);
         opt.max_iter = (maxIter_ > 0 ? static_cast<int>(maxIter_) : 1000);
-        // Threaded (OpenMP) SELL kernels by default. openmp is bit-identical to
-        // the reference path (SELL fixed-order accumulation), so this is pure
-        // parallelisation, not a different numerical path (invariant #4 holds).
+        // Threaded (OpenMP) SELL kernels by default. The openmp path stays within
+        // the reorder-equivalence class of the reference (SELL fixed-order
+        // accumulation keeps the SpMV bitwise-identical; the FCG dot reductions
+        // are not bit-reproducible unless the deterministic mode is selected), so
+        // this is parallelisation, not a different numerical path (invariant #4).
         const spume::Dispatch disp =
             controlDict_.getOrDefault<bool>("spumeThreaded", true)
                 ? spume::Dispatch::openmp : spume::Dispatch::reference;
@@ -217,7 +261,7 @@ Foam::solverPerformance Foam::spumePCG::solve
         // the preconditioner stays current instead of drifting toward the first
         // matrix, so a transient run's evolving coefficients cannot degrade it.
         const bool amgCache = controlDict_.getOrDefault<bool>("spumeAmgCache", true);
-        const void* meshKey = static_cast<const void*>(&matrix_.lduAddr());
+        const std::uint64_t topoHash = hashAddressing(lowerAddr, upperAddr, nCells);
 
         std::unique_ptr<spume::Preconditioner> localPrecond;
         spume::Preconditioner* activePrecond = nullptr;
@@ -276,13 +320,13 @@ Foam::solverPerformance Foam::spumePCG::solve
                 // and build the operators fresh from `csr` each solve.
                 std::vector<spume::Aggregation> freshAggs;
                 const bool cacheHit = amgCache && g_amgCache.valid
-                    && g_amgCache.key == meshKey
+                    && g_amgCache.topo == topoHash
                     && g_amgCache.ncells == nCells
                     && g_amgCache.name == pc;
                 if (amgCache && !cacheHit)
                 {
                     g_amgCache.aggs = spume::aggregate_hierarchy(csr, 200, 20);
-                    g_amgCache.key = meshKey;
+                    g_amgCache.topo = topoHash;
                     g_amgCache.ncells = nCells;
                     g_amgCache.name = pc;
                     g_amgCache.valid = true;
