@@ -42,6 +42,30 @@ HIP-event kernel time (ADR-0013 honest-degradation methodology), which
 structurally cannot overstate achieved bandwidth (the model undercounts gather
 traffic).
 
+## Profiling / instrumentation
+
+Install the ROCm profiling layer (rocprofv3, rocprof-compute, rocm-bandwidth-test,
+rocprof-sys, rocgdb, amd-smi) reproducibly:
+
+```
+scripts/install_gpu_tooling.sh            # install + verify
+scripts/install_gpu_tooling.sh --verify   # check an existing install
+```
+
+Kernel trace of the SpMV check (durations per launch):
+
+```
+rocprofv3 --kernel-trace --output-format csv -d out -- \
+    ./build/gpu/src/backends/gpu/spume-gpu-spmv-check 128
+```
+
+`rocprofv3 --pmc FETCH_SIZE WRITE_SIZE` gives hardware memory-traffic counters
+(true achieved bytes vs the traffic model) but serialises every dispatch, so
+point it at a single-launch driver, not the 50-rep bench loop. `rocm-bandwidth-test`
+(v2.6+ uses a `run`/`plugin` subcommand CLI) gives the measured DRAM roofline to
+replace the 256 GB/s theoretical denominator. rocprof counter analysis is the
+next profiling pass (see roadmap M3 Phase 3).
+
 ## Next (M3 Phase 3)
 
 Port the FP32 Chebyshev smoother and the K-cycle (prototypes in
