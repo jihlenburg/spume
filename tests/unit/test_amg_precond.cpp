@@ -12,8 +12,10 @@
 #include "core/formats.hpp"
 #include "core/poisson.hpp"
 #include "core/precond.hpp"
+#include "core/reduce.hpp"
 #include "core/sell.hpp"
 #include "core/solver.hpp"
+#include "core/spmv.hpp"
 
 TEST_CASE("multi-level AMG preconditioner solves and accelerates fcg") {
     const spume::Csr a = spume::coo_to_csr(spume::gen::poisson7(32, 32, 32));
@@ -108,6 +110,62 @@ TEST_CASE("K-cycle accelerates the V-cycle and reaches the same answer") {
     for (std::size_t i = 0; i < n; ++i) {
         CHECK(xk32[i] == doctest::Approx(xv[i]).epsilon(1e-5));
     }
+}
+
+TEST_CASE("K-cycle strictly accelerates the V-cycle on a graded operator") {
+    // The M2 headline (docs/m2-progress.md): a plain V-cycle over unsmoothed
+    // aggregation stalls on a graded operator (V=72), while the K-cycle recovers
+    // a mesh-independent rate (K=12). The isotropic test above cannot see this —
+    // a V-cycle already converges there, so its `<=` passes even for an inert
+    // K-cycle. Here a z-conductivity graded 1..1000 makes the V-cycle genuinely
+    // weak. We measure each cycle's OWN convergence via the stationary iteration
+    // x <- x + M(b - A x), NOT the outer FCG — a Krylov wrap would accelerate
+    // both and mask the gap (exactly what hid it in the isotropic case).
+    const spume::Csr a =
+        spume::coo_to_csr(spume::gen::poisson7_graded(32, 32, 32, 1.0, 1000.0));
+    const spume::Sell<double> A = spume::sell_from_csr(a);
+    const auto n = static_cast<std::size_t>(a.nrows);
+
+    std::vector<double> b(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        b[i] = 0.5 - static_cast<double>(i % 13) * 0.1;
+    }
+    const double bnorm = spume::nrm2(std::span<const double>(b));
+
+    // Cycles for the stationary iteration to cut the residual to 1e-8*||b||.
+    auto cycles_to_converge = [&](const spume::Preconditioner& M) {
+        std::vector<double> x(n, 0.0), r(n), z(n), ax(n);
+        int it = 0;
+        for (; it < 500; ++it) {
+            spume::spmv(A, std::span<const double>(x), std::span<double>(ax));
+            for (std::size_t i = 0; i < n; ++i) {
+                r[i] = b[i] - ax[i];
+            }
+            if (spume::nrm2(std::span<const double>(r)) <= 1e-8 * bnorm) {
+                break;
+            }
+            M.apply(std::span<const double>(r), std::span<double>(z));
+            for (std::size_t i = 0; i < n; ++i) {
+                x[i] += z[i];
+            }
+        }
+        return it;
+    };
+
+    const spume::AmgPrecond<double> vcycle(
+        a, {}, 16, 20, 1e-2, 500, spume::Dispatch::reference, /*kcycle=*/false);
+    const spume::AmgPrecond<double> kcyc(
+        a, {}, 16, 20, 1e-2, 500, spume::Dispatch::reference, /*kcycle=*/true);
+
+    const int itv = cycles_to_converge(vcycle);
+    const int itk = cycles_to_converge(kcyc);
+    CAPTURE(itv);
+    CAPTURE(itk);
+    REQUIRE(itk < 500);         // K-cycle converges
+    CHECK(itv >= 30);           // the V-cycle genuinely stalls (premise holds)
+    // Substantial acceleration (>= 1.33x fewer cycles). A no-op K-cycle would
+    // match the V-cycle count (itk == itv) and fail this by a wide margin.
+    CHECK(itk * 4 <= itv * 3);
 }
 
 TEST_CASE("AMG accepts an externally-supplied hierarchy (the GAMG-reuse path)") {
