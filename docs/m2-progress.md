@@ -75,12 +75,27 @@ per-phase `log 1` timers):
    **~1.34x faster** at identical iterations: the pure bandwidth win, no
    thread-count or algorithm confound. Consistent with the 0.63 FP32/FP64 SpMV
    byte ratio diluted by the FP64 outer work.
-2. **The V-cycle is a weak preconditioner (the bigger lever).** 118 iterations
-   where a tuned GAMG converges in ~10-20. This is **precision-independent**
-   (FP64 needs the same 118): a point-Chebyshev smoother on the high-aspect
-   anisotropic pitzBig mesh, exactly where GAMG's DIC-GaussSeidel wins.
-   Cutting iterations (line/ILU smoother, W-cycle) multiplies *on top of* the
-   1.34x and dwarfs any per-iteration byte tuning.
+2. **SPUME's multigrid is not yet competitive with GAMG (THE M2 blocker).**
+   Iteration counts on pitzBig at matched tol (1e-8, relTol 0.01), each
+   preconditioning an outer Krylov:
+
+   | preconditioner | pressure iters |
+   |---|---|
+   | **stock GAMG (DIC-GaussSeidel)** | **11 / 27 / 11** |
+   | SPUME gamgFP32 (reuse OF hierarchy + Chebyshev) | 118 / 119 / 122 |
+   | SPUME amgFP32 (self-coarsening + Chebyshev) | 172 / 174 / 187 |
+
+   pitzBig is NOT just hard — stock GAMG solves it in ~15 iters. SPUME's AMG is
+   **~5-10x weaker** on this real graded mesh, and that iteration deficit dwarfs
+   the 1.34x FP32 win (net, SPUME loses to GAMG on wall time even at 16 threads
+   vs stock's 1). The gap is **precision-independent** (FP64 needs the same
+   counts). Diagnostic: on a *synthetic uniform-anisotropy* operator
+   (cz/cx=100) SPUME's self-coarsening Chebyshev AMG converges in ~16 iters —
+   competitive. It is the *real graded* mesh both SPUME paths fail on and GAMG
+   handles: the smoother is sound in principle, but the coarsening + Chebyshev
+   pairing does not match GAMG's faceAreaPair + DIC-GaussSeidel on real CFD
+   operators. This sits in tension with M3: Chebyshev was chosen *because*
+   Gauss-Seidel does not map to the GPU, yet DIC-GaussSeidel is what wins here.
 
 **Confound retired:** never compare spumePCG(16 threads) wall-time vs stock
 pimpleFoam pressure (single-thread — OpenFOAM scales by MPI, not threads); that
@@ -90,12 +105,19 @@ parallelism (stock N MPI ranks vs spume N threads). The earlier large-case
 
 ## Open threads (don't lose these)
 
-1. **[MAIN] Strengthen the V-cycle smoother** — the named bottleneck: 118 iters
-   is precision-independent weakness on anisotropic meshes. A line-implicit or
-   ILU(0) smoother (GAMG-parity) to reach ~15 iters is the largest remaining M2
-   lever, and it compounds with the 1.36x FP32 win.
+1. **[MAIN] Close the preconditioner-quality gap** — SPUME's AMG takes ~118-190
+   iters where GAMG takes ~15 on real graded meshes (measured above). This
+   precision-independent 5-10x deficit is THE M2 blocker; the 1.34x FP32 win is
+   real but second-order until it closes. Candidate levers, in tension with the
+   M3 GPU goal (needs a design call / ADR):
+   - a DIC/ILU(0)-style smoother to match GAMG — strongest, but Gauss-Seidel-like
+     and hard to map to the GPU (the reason Chebyshev was chosen);
+   - better coarsening (smoothed aggregation / match faceAreaPair) with Chebyshev
+     kept — GPU-friendly, unproven on graded meshes;
+   - a stronger cycle (W-cycle, more pre/post smooths, tighter coarse solve).
+   Next measurement: sweep these on pitzBig, iteration count as the metric.
 2. **vs-OpenFOAM headline at matched parallelism** — stock N-rank MPI GAMG vs
-   spume N-thread gamgFP32, same core budget, so the number is honest.
+   spume N-thread gamgFP32, same core budget (only meaningful once #1 closes).
 3. **Productionize NT stores** as a `src/backends/` SpMV kernel (checkasm +
    dispatch, ~7% measured). First real hand-AVX-512; wire into the AMG residual.
 4. **Amortize per-solve V-cycle setup** — ~1 s/solve rebuilding Galerkin
