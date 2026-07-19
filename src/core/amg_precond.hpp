@@ -126,7 +126,10 @@ private:
         std::fill(lev.ec.begin(), lev.ec.end(), 0.0);
         coarse_solve(lvl + 1, std::span<const double>(lev.rc), std::span<double>(lev.ec));
 
-        // prolong: z += P ec
+        // prolong: z += P ec  (gather-add; each row writes its own z[i], so
+        // this is thread-count-invariant -- safe to parallelise and still
+        // bitwise-reproducible, unlike the restriction scatter-add above)
+#pragma omp parallel for schedule(static) if (dispatch_ == Dispatch::openmp)
         for (index_t i = 0; i < lev.a.nrows; ++i) {
             z[static_cast<std::size_t>(i)] += lev.ec[agg_of(lev, i)];
         }
@@ -134,8 +137,10 @@ private:
         // post-smooth: z += S(r - A z)
         residual(lev, r, z);
         lev.smoother->apply(std::span<const double>(lev.res), std::span<double>(lev.sm));
-        for (std::size_t i = 0; i < r.size(); ++i) {
-            z[i] += lev.sm[i];
+        const auto npost = static_cast<index_t>(r.size());
+#pragma omp parallel for schedule(static) if (dispatch_ == Dispatch::openmp)
+        for (index_t i = 0; i < npost; ++i) {
+            z[static_cast<std::size_t>(i)] += lev.sm[static_cast<std::size_t>(i)];
         }
     }
 
@@ -241,8 +246,13 @@ private:
     void residual(const Level& lev, std::span<const double> r,
                   std::span<const double> z) const {
         spmv(lev.a, z, std::span<double>(lev.az), dispatch_);
-        for (std::size_t i = 0; i < r.size(); ++i) {
-            lev.res[i] = r[i] - lev.az[i];
+        // res = r - A z: each element independent, so threading it is
+        // thread-count-invariant (determinism-safe).
+        const auto n = static_cast<index_t>(r.size());
+#pragma omp parallel for schedule(static) if (dispatch_ == Dispatch::openmp)
+        for (index_t i = 0; i < n; ++i) {
+            lev.res[static_cast<std::size_t>(i)] =
+                r[static_cast<std::size_t>(i)] - lev.az[static_cast<std::size_t>(i)];
         }
     }
 
