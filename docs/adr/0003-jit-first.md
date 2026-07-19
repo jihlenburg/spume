@@ -2,6 +2,11 @@
 
 - Status: Accepted
 - Date: 2026-07-12
+- Amended by: ADR-0016 — hand-written/inline ISA assembly is permitted as
+  pluggable, reference-backed, `checkasm`-verified `src/backends/`
+  specializations behind runtime dispatch. JIT-first remains the default
+  strategy and the portability answer; the rejected "hand-written asm kernel
+  library" below is reinstated *only* under ADR-0016's discipline.
 
 ## Context
 
@@ -37,7 +42,10 @@ mitigations are the stable IR, the reference dispatch, and contract tests.
 ## Rejected alternatives
 
 - Hand-written asm kernel library: unmaintainable cul-de-sac; rejected
-  after explicit evaluation.
+  after explicit evaluation. **(Amended by ADR-0016: permitted after all, but
+  only as pluggable, reference-backed, `checkasm`-verified `src/backends/`
+  specializations — the FFmpeg discipline that makes hand-asm maintainable. The
+  original objection stands for *undisciplined* hand-asm.)**
 - Compiler-only (trust -O3): leaves per-stream NT stores, gather
   pipelining, and cache-policy control on the table; LLVM extracts RDNA
   dual-issue poorly.

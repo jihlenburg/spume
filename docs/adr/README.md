@@ -24,3 +24,5 @@ one-line entry in the index below.
 | 0012 | Test framework: vendored doctest             | Accepted |
 | 0013 | Benchmark evidence on non-lab machines       | Accepted |
 | 0014 | Upstream baseline: OpenFOAM v2606, pruned    | Accepted |
+| 0015 | Local Strix Halo is the performance reference| Accepted |
+| 0016 | Inline asm permitted as pluggable backends   | Accepted |
