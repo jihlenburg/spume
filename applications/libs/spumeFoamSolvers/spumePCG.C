@@ -209,13 +209,20 @@ Foam::solverPerformance Foam::spumePCG::solve
                 static_cast<int>(nCells)
             );
 
+            // V-cycle smoother knobs, shared by every AMG path so the cheap
+            // cycle tweaks (more Chebyshev steps, spectral width, coarse-solve
+            // tolerance) are dictionary-tunable without a rebuild. Defaults
+            // reproduce the previous behaviour (steps 5, eta 30, coarse 1e-2).
+            spume::ChebyshevOptions copt;
+            copt.steps =
+                static_cast<int>(controlDict_.getOrDefault<label>("chebyshevSteps", 5));
+            copt.eta =
+                static_cast<double>(controlDict_.getOrDefault<scalar>("chebyshevEta", 30.0));
+            const double coarseTol =
+                static_cast<double>(controlDict_.getOrDefault<scalar>("amgCoarseTol", 1e-2));
+
             if (pc == "chebyshevFP32")
             {
-                spume::ChebyshevOptions copt;
-                copt.steps =
-                    static_cast<int>(controlDict_.getOrDefault<label>("chebyshevSteps", 5));
-                copt.eta =
-                    static_cast<double>(controlDict_.getOrDefault<scalar>("chebyshevEta", 30.0));
                 precond = std::make_unique<spume::ChebyshevPrecond<float>>
                 (
                     spume::make_eq_operator<float>(csr), copt, disp
@@ -224,11 +231,11 @@ Foam::solverPerformance Foam::spumePCG::solve
             else if (pc == "amgFP32")
             {
                 // FP32 algebraic multigrid with SPUME's own greedy coarsening.
-                precond = std::make_unique<spume::AmgPrecond<float>>(csr, spume::ChebyshevOptions{}, 200, 20, 1e-2, 500, disp);
+                precond = std::make_unique<spume::AmgPrecond<float>>(csr, copt, 200, 20, coarseTol, 500, disp);
             }
             else if (pc == "amgFP64")
             {
-                precond = std::make_unique<spume::AmgPrecond<double>>(csr, spume::ChebyshevOptions{}, 200, 20, 1e-2, 500, disp);
+                precond = std::make_unique<spume::AmgPrecond<double>>(csr, copt, 200, 20, coarseTol, 500, disp);
             }
             else if (pc == "gamgFP32" || pc == "gamgFP64")
             {
@@ -252,11 +259,11 @@ Foam::solverPerformance Foam::spumePCG::solve
 
                 if (pc == "gamgFP32")
                 {
-                    precond = std::make_unique<spume::AmgPrecond<float>>(csr, hierarchy, spume::ChebyshevOptions{}, 1e-2, 500, disp);
+                    precond = std::make_unique<spume::AmgPrecond<float>>(csr, hierarchy, copt, coarseTol, 500, disp);
                 }
                 else
                 {
-                    precond = std::make_unique<spume::AmgPrecond<double>>(csr, hierarchy, spume::ChebyshevOptions{}, 1e-2, 500, disp);
+                    precond = std::make_unique<spume::AmgPrecond<double>>(csr, hierarchy, copt, coarseTol, 500, disp);
                 }
             }
             else
