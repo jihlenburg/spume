@@ -2,6 +2,7 @@
 # Copyright (C) 2026 Joern Ihlenburg
 
 add_library(spume-core STATIC
+    amg.cpp
     formats.cpp
     poisson.cpp
     reduce.cpp
