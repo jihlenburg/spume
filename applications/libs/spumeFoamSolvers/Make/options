@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (C) 2026 Joern Ihlenburg */
+
+/* SPUME_PROJECT_DIR is exported by scripts/foam-env.sh; it provides the compat
+ * shim (src/compat/ldu.hpp). lduMatrix.H resolves via the OpenFOAM lnInclude
+ * paths wmake adds automatically. Stage 0 needs only libOpenFOAM. */
+
+EXE_INC = \
+    -I$(SPUME_PROJECT_DIR)/src
+
+LIB_LIBS = \
+    -lOpenFOAM

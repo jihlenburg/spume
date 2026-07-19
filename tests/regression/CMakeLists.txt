@@ -22,4 +22,14 @@ if(SPUME_WITH_OPENFOAM)
     set_tests_properties(spume-equivalence-pimple PROPERTIES
         LABELS equivalence
         TIMEOUT 3600)
+
+    # The runtime-selectable spumePCG solver equals the reference PCG within the
+    # rounding-reorder class (ADR-0002). Stage 0 (passthrough) is bitwise; the
+    # gate uses the looser reorder-tolerance so it also holds for Stage 1's real
+    # M0 CG. Builds libspumeFoamSolvers via wmake on first run.
+    add_test(NAME spume-equivalence-spumepcg
+        COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/run_spumepcg_equivalence.sh)
+    set_tests_properties(spume-equivalence-spumepcg PROPERTIES
+        LABELS equivalence
+        TIMEOUT 3600)
 endif()
