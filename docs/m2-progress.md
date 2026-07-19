@@ -108,14 +108,28 @@ parallelism (stock N MPI ranks vs spume N threads). The earlier large-case
 1. **[MAIN] Close the preconditioner-quality gap** — SPUME's AMG takes ~118-190
    iters where GAMG takes ~15 on real graded meshes (measured above). This
    precision-independent 5-10x deficit is THE M2 blocker; the 1.34x FP32 win is
-   real but second-order until it closes. Candidate levers, in tension with the
-   M3 GPU goal (needs a design call / ADR):
+   real but second-order until it closes.
+
+   **Cheap cycle tweaks MEASURED and RULED OUT** (pitzBig gamgFP32, 1st solve):
+
+   | config | iters | solve time |
+   |---|---|---|
+   | baseline (steps 5) | 117 | **10.5 s** |
+   | steps 10 | 95 | 14.6 s |
+   | steps 20 | 76 | 20.8 s |
+   | steps 10, eta 100, coarse 1e-3 | 83 | 13.3 s |
+
+   More smoothing cuts iterations ~35% but every config is *slower* on wall time
+   — the extra per-iteration Chebyshev SpMVs (89 -> 274 ms/iter at steps 20)
+   outweigh the iteration savings. Tighter coarse-solve had zero effect on a
+   synthetic graded operator. So the gap is **structural, not tunable**: it needs
+   better coarsening or a different smoother, both a design call in tension with
+   the M3 GPU goal (needs an ADR):
    - a DIC/ILU(0)-style smoother to match GAMG — strongest, but Gauss-Seidel-like
      and hard to map to the GPU (the reason Chebyshev was chosen);
    - better coarsening (smoothed aggregation / match faceAreaPair) with Chebyshev
-     kept — GPU-friendly, unproven on graded meshes;
-   - a stronger cycle (W-cycle, more pre/post smooths, tighter coarse solve).
-   Next measurement: sweep these on pitzBig, iteration count as the metric.
+     kept — GPU-friendly, unproven on graded meshes.
+   (Knobs are now dictionary-tunable: chebyshevSteps/chebyshevEta/amgCoarseTol.)
 2. **vs-OpenFOAM headline at matched parallelism** — stock N-rank MPI GAMG vs
    spume N-thread gamgFP32, same core budget (only meaningful once #1 closes).
 3. **Productionize NT stores** as a `src/backends/` SpMV kernel (checkasm +
