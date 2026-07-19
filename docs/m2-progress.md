@@ -105,8 +105,9 @@ parallelism (stock N MPI ranks vs spume N threads). The earlier large-case
 
 ## Open threads (don't lose these)
 
-1. **[MAIN] Close the preconditioner-quality gap** — SPUME's AMG takes ~118-190
-   iters where GAMG takes ~15 on real graded meshes (measured above). This
+1. **[MAIN] Implement the K-cycle (root cause found).** SPUME's AMG takes
+   ~118-190 iters where GAMG takes ~15 on real graded meshes (measured above).
+   This
    precision-independent 5-10x deficit is THE M2 blocker; the 1.34x FP32 win is
    real but second-order until it closes.
 
@@ -122,14 +123,27 @@ parallelism (stock N MPI ranks vs spume N threads). The earlier large-case
    More smoothing cuts iterations ~35% but every config is *slower* on wall time
    — the extra per-iteration Chebyshev SpMVs (89 -> 274 ms/iter at steps 20)
    outweigh the iteration savings. Tighter coarse-solve had zero effect on a
-   synthetic graded operator. So the gap is **structural, not tunable**: it needs
-   better coarsening or a different smoother, both a design call in tension with
-   the M3 GPU goal (needs an ADR):
-   - a DIC/ILU(0)-style smoother to match GAMG — strongest, but Gauss-Seidel-like
-     and hard to map to the GPU (the reason Chebyshev was chosen);
-   - better coarsening (smoothed aggregation / match faceAreaPair) with Chebyshev
-     kept — GPU-friendly, unproven on graded meshes.
-   (Knobs are now dictionary-tunable: chebyshevSteps/chebyshevEta/amgCoarseTol.)
+   synthetic graded operator. So the gap is **structural, not tunable**.
+
+   **ROOT CAUSE FOUND — it is the CYCLE, not the smoother.** The V-cycle uses
+   unsmoothed (piecewise-constant) aggregation transfers; a plain V-cycle over
+   that is the textbook-weak case, which is why no smoother rescued it (GS ruled
+   out too: 115-169 iters, never near 15). Prototyped V vs W vs K cycle over the
+   same hierarchy (graded operator, scratchpad/kcycle_probe.cpp):
+
+   | grading | V-cycle | W-cycle | K-cycle |
+   |---|---|---|---|
+   | cz 1..100  | 40 | 14 | **12** |
+   | cz 1..1000 | 72 | 19 | **12** |
+
+   The **K-cycle collapses iterations to ~12 and is grading-independent** —
+   GAMG-parity (15). It KEEPS the bandwidth-friendly Chebyshev smoother, so it
+   is GPU/SIMD-neutral (no ADR tension). This is the win path: **K-cycle +
+   Chebyshev + FP32 firewall = GAMG-parity iters x 1.34x bandwidth**. Caveat: a
+   naive K-cycle recurses ~2-3x per level (exponential in levels); the
+   production form is Notay's AGMG K-cycle with a residual-reduction test (2nd
+   inner iteration only when ||r1|| > ~0.25 ||r0||), keeping it near-linear.
+   (Cheap tuning knobs also landed: chebyshevSteps/chebyshevEta/amgCoarseTol.)
 2. **vs-OpenFOAM headline at matched parallelism** — stock N-rank MPI GAMG vs
    spume N-thread gamgFP32, same core budget (only meaningful once #1 closes).
 3. **Productionize NT stores** as a `src/backends/` SpMV kernel (checkasm +
