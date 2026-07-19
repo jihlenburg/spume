@@ -14,8 +14,8 @@
 #include "core/sell.hpp"
 #include "core/solver.hpp"
 
-TEST_CASE("two-level AMG preconditioner solves and accelerates fcg") {
-    const spume::Csr a = spume::coo_to_csr(spume::gen::poisson7(24, 24, 24));
+TEST_CASE("multi-level AMG preconditioner solves and accelerates fcg") {
+    const spume::Csr a = spume::coo_to_csr(spume::gen::poisson7(32, 32, 32));
     const spume::Sell<double> A = spume::sell_from_csr(a);
     const auto n = static_cast<std::size_t>(a.nrows);
 
@@ -26,7 +26,7 @@ TEST_CASE("two-level AMG preconditioner solves and accelerates fcg") {
 
     spume::SolveOptions opt;
     opt.tol = 1e-8;
-    opt.max_iter = 3000;
+    opt.max_iter = 4000;
 
     // Baseline: flexible CG with the Chebyshev polynomial preconditioner alone.
     const auto eqop = spume::make_eq_operator<double>(a);
@@ -36,27 +36,20 @@ TEST_CASE("two-level AMG preconditioner solves and accelerates fcg") {
         spume::fcg(A, cheb, std::span<const double>(b), std::span<double>(x_cheb), opt);
     REQUIRE(r_cheb.converged);
 
-    // Two-level AMG: same Chebyshev as the smoother, plus a coarse correction.
-    const spume::TwoLevelPrecond<double> amg(a);
+    // Multi-level AMG (FP64 smoother).
+    const spume::AmgPrecond<double> amg(a);
+    CHECK(amg.num_levels() >= 3); // genuinely a hierarchy, not just two levels
     std::vector<double> x_amg(n, 0.0);
     const spume::SolveResult r_amg =
         spume::fcg(A, amg, std::span<const double>(b), std::span<double>(x_amg), opt);
-
     CHECK(r_amg.converged);
-
-    // The coarse-grid correction kills the low-frequency error the smoother
-    // cannot, so the outer iteration count must drop materially.
-    CHECK(r_amg.iterations < r_cheb.iterations);
-
-    // ...and it converges to the same solution (the outer FP64 Krylov defines it)
+    CHECK(r_amg.iterations < r_cheb.iterations); // coarse correction accelerates
     for (std::size_t i = 0; i < n; ++i) {
         CHECK(x_amg[i] == doctest::Approx(x_cheb[i]).epsilon(1e-5));
     }
 
-    // Mixed precision (ADR-0002): an FP32 smoother interior must still converge
-    // (no worse than the polynomial baseline) to the same FP64 answer — the
-    // reduced precision steers, the flexible FP64 outer Krylov defines the result.
-    const spume::TwoLevelPrecond<float> amg32(a);
+    // Mixed precision (ADR-0002): FP32 smoother interior, same FP64 answer.
+    const spume::AmgPrecond<float> amg32(a);
     std::vector<double> x32(n, 0.0);
     const spume::SolveResult r32 =
         spume::fcg(A, amg32, std::span<const double>(b), std::span<double>(x32), opt);
