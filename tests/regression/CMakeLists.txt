@@ -32,4 +32,14 @@ if(SPUME_WITH_OPENFOAM)
     set_tests_properties(spume-equivalence-spumepcg PROPERTIES
         LABELS equivalence
         TIMEOUT 3600)
+
+    # Mixed precision (ADR-0002): spumePCG with the FP32 Chebyshev preconditioner
+    # under the FP64 outer CG must stay within the same equivalence class — the
+    # FP32 preconditioner steers but never defines the answer.
+    add_test(NAME spume-equivalence-spumepcg-fp32
+        COMMAND ${CMAKE_COMMAND} -E env SPUME_PRECOND=chebyshevFP32
+                sh ${CMAKE_CURRENT_SOURCE_DIR}/run_spumepcg_equivalence.sh)
+    set_tests_properties(spume-equivalence-spumepcg-fp32 PROPERTIES
+        LABELS equivalence
+        TIMEOUT 3600)
 endif()

@@ -65,6 +65,27 @@ TEST_CASE("assemble_sell places lower and upper on the correct sides") {
     CHECK(y[2] == doctest::Approx(-2.0));
 }
 
+// assemble_csr must build the identical operator (it feeds make_eq_operator<T>
+// for the FP32 preconditioner). Verified through the same SpMV path.
+TEST_CASE("assemble_csr builds the same operator as assemble_sell") {
+    const std::vector<int> lowerAddr{0, 1};
+    const std::vector<int> upperAddr{1, 2};
+    const std::vector<double> diag{2.0, 2.0, 2.0};
+    const std::vector<double> upper{-1.0, -1.0};
+
+    const spume::Csr c =
+        spume::assemble_csr(lowerAddr, upperAddr, diag, upper, /*lower=*/{}, 3);
+
+    CHECK(c.nrows == 3);
+    CHECK(c.nnz() == 7);  // 3 diagonal + 2*2 off-diagonal, no duplicates
+
+    const spume::Sell<double> a = spume::sell_from_csr(c);
+    const std::vector<double> y = spmv_vec(a, {1.0, 2.0, 3.0});
+    CHECK(y[0] == doctest::Approx(0.0));
+    CHECK(y[1] == doctest::Approx(0.0));
+    CHECK(y[2] == doctest::Approx(4.0));
+}
+
 TEST_CASE("assemble_sell rejects mismatched array sizes") {
     const std::vector<int> l1{0};
     const std::vector<int> u2{1, 2};      // upperAddr longer than lowerAddr

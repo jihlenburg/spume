@@ -5,35 +5,39 @@
 
 #include <cstddef>
 #include <stdexcept>
+#include <string>
 
 #include "core/formats.hpp"
 
 namespace spume {
 
-Sell<double> assemble_sell(std::span<const int> lowerAddr,
-                           std::span<const int> upperAddr,
-                           std::span<const double> diag,
-                           std::span<const double> upper,
-                           std::span<const double> lower,
-                           int nCells) {
+namespace {
+
+// Shared LDU -> COO assembly for both the SELL and CSR builders: one diagonal
+// entry per cell and two off-diagonal entries per face. coo_to_csr (called by
+// both converters) range-checks the indices and sums any duplicates.
+Coo ldu_to_coo(std::span<const int> lowerAddr,
+               std::span<const int> upperAddr,
+               std::span<const double> diag,
+               std::span<const double> upper,
+               std::span<const double> lower,
+               int nCells,
+               const char* who) {
     if (nCells < 0) {
-        throw std::invalid_argument("assemble_sell: negative nCells");
+        throw std::invalid_argument(std::string(who) + ": negative nCells");
     }
     if (diag.size() != static_cast<std::size_t>(nCells)) {
-        throw std::invalid_argument("assemble_sell: diag size != nCells");
+        throw std::invalid_argument(std::string(who) + ": diag size != nCells");
     }
     const std::size_t nFaces = lowerAddr.size();
     if (upperAddr.size() != nFaces || upper.size() != nFaces) {
-        throw std::invalid_argument("assemble_sell: addressing/upper size mismatch");
+        throw std::invalid_argument(std::string(who) + ": addressing/upper size mismatch");
     }
     const bool symmetric = lower.empty();
     if (!symmetric && lower.size() != nFaces) {
-        throw std::invalid_argument("assemble_sell: lower size != nFaces");
+        throw std::invalid_argument(std::string(who) + ": lower size != nFaces");
     }
 
-    // Build a COO with one diagonal entry per cell and two off-diagonal
-    // entries per face, then let the core assemble/validate the SELL operator
-    // (coo_to_csr range-checks the indices and sums any duplicates).
     Coo coo;
     coo.nrows = nCells;
     coo.ncols = nCells;
@@ -61,7 +65,29 @@ Sell<double> assemble_sell(std::span<const int> lowerAddr,
         coo.val.push_back(symmetric ? upper[f] : lower[f]);
     }
 
-    return sell_from_coo(coo);
+    return coo;
+}
+
+} // namespace
+
+Sell<double> assemble_sell(std::span<const int> lowerAddr,
+                           std::span<const int> upperAddr,
+                           std::span<const double> diag,
+                           std::span<const double> upper,
+                           std::span<const double> lower,
+                           int nCells) {
+    return sell_from_coo(
+        ldu_to_coo(lowerAddr, upperAddr, diag, upper, lower, nCells, "assemble_sell"));
+}
+
+Csr assemble_csr(std::span<const int> lowerAddr,
+                 std::span<const int> upperAddr,
+                 std::span<const double> diag,
+                 std::span<const double> upper,
+                 std::span<const double> lower,
+                 int nCells) {
+    return coo_to_csr(
+        ldu_to_coo(lowerAddr, upperAddr, diag, upper, lower, nCells, "assemble_csr"));
 }
 
 } // namespace spume

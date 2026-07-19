@@ -5,10 +5,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <span>
 #include <vector>
 
 #include "bridge/ldu_to_sell.hpp"
+#include "core/equilibrate.hpp"
 #include "core/precond.hpp"
 #include "core/sell.hpp"
 #include "core/solver.hpp"
@@ -151,18 +153,6 @@ Foam::solverPerformance Foam::spumePCG::solve
 
     if (minIter_ > 0 || !solverPerf.checkConvergence(tolerance_, relTol_, log_))
     {
-        // Flexible CG (FP64) with an exact diagonal Jacobi preconditioner.
-        // FP64 throughout: M2a introduces no reduced precision — that arrives
-        // with the FP32 preconditioner in a later slice (ADR-0002).
-        spume::EqOperator<double> eq;
-        eq.scale.resize(static_cast<std::size_t>(nCells));
-        for (label i = 0; i < nCells; ++i)
-        {
-            eq.scale[static_cast<std::size_t>(i)] =
-                1.0/std::sqrt(sdiag[static_cast<std::size_t>(i)]);
-        }
-        spume::JacobiPrecond<double> precond(eq);
-
         spume::SolveOptions opt;
         opt.tol = static_cast<double>(tolerance_);
         opt.max_iter = (maxIter_ > 0 ? static_cast<int>(maxIter_) : 1000);
@@ -174,10 +164,53 @@ Foam::solverPerformance Foam::spumePCG::solve
             b[static_cast<std::size_t>(i)] = sgn*source[i];  // (-A) x = (-b)
         }
 
+        // Preconditioner selection. Default: FP64 exact diagonal Jacobi (the
+        // reference-precision path, ADR-0004). Opt-in `chebyshevFP32` is the
+        // ADR-0002 mixed-precision path — reduced precision ONLY inside the
+        // preconditioner, under the flexible FP64 outer CG, with mandatory
+        // diagonal equilibration (make_eq_operator<float> equilibrates in FP64
+        // then narrows to FP32). The outer operator `a` stays FP64.
+        const word pc =
+            controlDict_.getOrDefault<word>("spumePreconditioner", "jacobi");
+
+        std::unique_ptr<spume::Preconditioner> precond;
+        if (pc == "chebyshevFP32")
+        {
+            const spume::Csr csr = spume::assemble_csr
+            (
+                std::span<const int>(lowerAddr.cdata(), lowerAddr.size()),
+                std::span<const int>(upperAddr.cdata(), upperAddr.size()),
+                std::span<const double>(sdiag),
+                std::span<const double>(supper),
+                std::span<const double>{},
+                static_cast<int>(nCells)
+            );
+            spume::ChebyshevOptions copt;
+            copt.steps =
+                static_cast<int>(controlDict_.getOrDefault<label>("chebyshevSteps", 5));
+            copt.eta =
+                static_cast<double>(controlDict_.getOrDefault<scalar>("chebyshevEta", 30.0));
+            precond = std::make_unique<spume::ChebyshevPrecond<float>>
+            (
+                spume::make_eq_operator<float>(csr), copt
+            );
+        }
+        else
+        {
+            spume::EqOperator<double> eq;
+            eq.scale.resize(static_cast<std::size_t>(nCells));
+            for (label i = 0; i < nCells; ++i)
+            {
+                eq.scale[static_cast<std::size_t>(i)] =
+                    1.0/std::sqrt(sdiag[static_cast<std::size_t>(i)]);
+            }
+            precond = std::make_unique<spume::JacobiPrecond<double>>(eq);
+        }
+
         const spume::SolveResult res = spume::fcg
         (
             a,
-            precond,
+            *precond,
             std::span<const double>(b),
             std::span<double>(x),
             opt

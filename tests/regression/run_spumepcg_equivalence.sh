@@ -27,6 +27,8 @@ OF_DIR="${SPUME_OPENFOAM_DIR:-$ROOT/vendor/openfoam}"
 WORK="${SPUME_SPUMEPCG_WORK:-$ROOT/build/spumepcg}"
 CASE="$ROOT/tests/regression/cases/pitzDaily-pimple"
 MODE="${SPUME_EQUIV_MODE:-reorder-tolerance}"
+# spumePCG preconditioner: jacobi (FP64, default) or chebyshevFP32 (ADR-0002).
+SPUME_PRECOND="${SPUME_PRECOND:-jacobi}"
 # CMake build tree with the position-independent core/bridge static libs the
 # solver library links (built before this test in the nightly CI job).
 SPUME_BUILD_DIR="${SPUME_BUILD_DIR:-$ROOT/build/cpu-release}"
@@ -41,7 +43,7 @@ SPUME_BUILD_DIR="${SPUME_BUILD_DIR:-$ROOT/build/cpu-release}"
     exit 1
 }
 
-export ROOT OF_DIR WORK CASE MODE SPUME_BUILD_DIR
+export ROOT OF_DIR WORK CASE MODE SPUME_PRECOND SPUME_BUILD_DIR
 
 bash -c '
     set -eu
@@ -68,7 +70,7 @@ bash -c '
     # design spec) — a comparison-harness setting, not a default change. The
     # U/k/epsilon solvers are identical in both, so they cannot introduce a
     # difference; they use the same tight settings for a clean comparison.
-    write_fvsolution()  # $1 = case dir, $2 = pressure solver name
+    write_fvsolution()  # $1 = case dir, $2 = solver name, $3 = extra p entries
     {
         cat > "$1/system/fvSolution" <<EOF
 FoamFile { version 2.0; format ascii; class dictionary; object fvSolution; }
@@ -81,6 +83,7 @@ solvers
         tolerance       1e-10;
         relTol          0;
         maxIter         5000;
+        $3
     }
     pFinal { \$p; }
     "(U|k|epsilon)"
@@ -100,8 +103,11 @@ PIMPLE
 EOF
     }
 
-    write_fvsolution "$WORK/ref"  PCG
-    write_fvsolution "$WORK/test" spumePCG
+    # SPUME_PRECOND selects the spumePCG preconditioner (default jacobi = FP64;
+    # chebyshevFP32 = the ADR-0002 mixed-precision path). ref always uses the
+    # reference PCG.
+    write_fvsolution "$WORK/ref"  PCG      ""
+    write_fvsolution "$WORK/test" spumePCG "spumePreconditioner $SPUME_PRECOND;"
     # test loads the SPUME solver library.
     foamDictionary -entry libs -set "(spumeFoamSolvers)" "$WORK/test/system/controlDict" > /dev/null
 

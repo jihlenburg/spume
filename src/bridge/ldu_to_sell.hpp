@@ -5,6 +5,7 @@
 
 #include <span>
 
+#include "core/formats.hpp"
 #include "core/sell.hpp"
 
 namespace spume {
@@ -33,5 +34,15 @@ Sell<double> assemble_sell(std::span<const int> lowerAddr,
                            std::span<const double> upper,
                            std::span<const double> lower,
                            int nCells);
+
+// As assemble_sell, but returns the CSR form. Used to build the FP32
+// equilibrated preconditioner operator (make_eq_operator<float> takes a Csr).
+// Same LDU convention and validation.
+Csr assemble_csr(std::span<const int> lowerAddr,
+                 std::span<const int> upperAddr,
+                 std::span<const double> diag,
+                 std::span<const double> upper,
+                 std::span<const double> lower,
+                 int nCells);
 
 } // namespace spume
