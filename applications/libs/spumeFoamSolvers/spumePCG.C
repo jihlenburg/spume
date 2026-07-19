@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "bridge/ldu_to_sell.hpp"
+#include "core/amg_precond.hpp"
 #include "core/equilibrate.hpp"
 #include "core/precond.hpp"
 #include "core/sell.hpp"
@@ -174,28 +175,7 @@ Foam::solverPerformance Foam::spumePCG::solve
             controlDict_.getOrDefault<word>("spumePreconditioner", "jacobi");
 
         std::unique_ptr<spume::Preconditioner> precond;
-        if (pc == "chebyshevFP32")
-        {
-            const spume::Csr csr = spume::assemble_csr
-            (
-                std::span<const int>(lowerAddr.cdata(), lowerAddr.size()),
-                std::span<const int>(upperAddr.cdata(), upperAddr.size()),
-                std::span<const double>(sdiag),
-                std::span<const double>(supper),
-                std::span<const double>{},
-                static_cast<int>(nCells)
-            );
-            spume::ChebyshevOptions copt;
-            copt.steps =
-                static_cast<int>(controlDict_.getOrDefault<label>("chebyshevSteps", 5));
-            copt.eta =
-                static_cast<double>(controlDict_.getOrDefault<scalar>("chebyshevEta", 30.0));
-            precond = std::make_unique<spume::ChebyshevPrecond<float>>
-            (
-                spume::make_eq_operator<float>(csr), copt
-            );
-        }
-        else
+        if (pc == "jacobi")
         {
             spume::EqOperator<double> eq;
             eq.scale.resize(static_cast<std::size_t>(nCells));
@@ -205,6 +185,49 @@ Foam::solverPerformance Foam::spumePCG::solve
                     1.0/std::sqrt(sdiag[static_cast<std::size_t>(i)]);
             }
             precond = std::make_unique<spume::JacobiPrecond<double>>(eq);
+        }
+        else
+        {
+            // Non-Jacobi preconditioners consume the negated SPD operator as
+            // CSR (equilibrated to FP32 for the mixed-precision paths, ADR-0002).
+            const spume::Csr csr = spume::assemble_csr
+            (
+                std::span<const int>(lowerAddr.cdata(), lowerAddr.size()),
+                std::span<const int>(upperAddr.cdata(), upperAddr.size()),
+                std::span<const double>(sdiag),
+                std::span<const double>(supper),
+                std::span<const double>{},
+                static_cast<int>(nCells)
+            );
+
+            if (pc == "chebyshevFP32")
+            {
+                spume::ChebyshevOptions copt;
+                copt.steps =
+                    static_cast<int>(controlDict_.getOrDefault<label>("chebyshevSteps", 5));
+                copt.eta =
+                    static_cast<double>(controlDict_.getOrDefault<scalar>("chebyshevEta", 30.0));
+                precond = std::make_unique<spume::ChebyshevPrecond<float>>
+                (
+                    spume::make_eq_operator<float>(csr), copt
+                );
+            }
+            else if (pc == "amgFP32")
+            {
+                // FP32 algebraic multigrid — the M2 lever.
+                precond = std::make_unique<spume::AmgPrecond<float>>(csr);
+            }
+            else if (pc == "amgFP64")
+            {
+                precond = std::make_unique<spume::AmgPrecond<double>>(csr);
+            }
+            else
+            {
+                FatalErrorInFunction
+                    << "Unknown spumePreconditioner '" << pc
+                    << "' (expected jacobi | chebyshevFP32 | amgFP32 | amgFP64)"
+                    << exit(FatalError);
+            }
         }
 
         const spume::SolveResult res = spume::fcg

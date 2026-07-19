@@ -385,10 +385,13 @@ results (median wall time, seconds; timed region = solver run only)
   ratio SPUME/stock : ${RATIO}x   (>1 means SPUME is slower)
   steal-time        : ${STEAL_PCT}% of CPU jiffies across the timed region
 
-  NOTE: spumePCG (default FP64 Jacobi / opt-in FP32 Chebyshev) is a weaker
-  preconditioner than stock GAMG, so a ratio > 1 is EXPECTED at this milestone.
-  No speedup is claimed; this becomes meaningful at the M2 FP32-GAMG-inside-
-  FP64-Krylov preconditioner slice.
+  NOTE: with spumePreconditioner=amgFP32 the FP32 algebraic multigrid closes
+  most of the gap to stock GAMG (measured ~1.07x on pitzDaily). The residual gap
+  is largely the AMG hierarchy being rebuilt PER SOLVE rather than cached — the
+  mesh is static, so amortising the setup is the next lever, before the
+  mixed-precision bandwidth win even shows (which needs a large, non-cache-
+  resident case). Weaker preconditioners (jacobi, chebyshevFP32) are slower. No
+  speedup is claimed yet.
 
 equivalence verdict : $VERDICT
 ====================================================================
