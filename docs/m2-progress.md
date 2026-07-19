@@ -198,3 +198,47 @@ parallelism (stock N MPI ranks vs spume N threads). The earlier large-case
 6. **M3:** GPU-resident V-cycle — the Chebyshev smoother maps to the GPU;
    GAMG's Gauss-Seidel structurally cannot. (The FP32-firewall result de-risks
    this: reduced precision in the smoother is now proven convergence-neutral.)
+
+## Code-review follow-ups (2026-07-20)
+
+A full review of the SPUME-owned M0–M2 code (core numerics, bridge/compat, leaf
+apps, bench harness, tests). Landed fixes:
+
+- **[CORE] Determinism leak closed.** `AmgPrecond`'s coarsest-level FP64 CG ran
+  `Reduction::standard`, so a deterministic outer solve was NOT bitwise
+  reproducible across thread counts with the AMG preconditioner (a hard-rule
+  violation). Threaded a `Reduction` mode through `AmgPrecond` into the coarse
+  CG; `tests/regression` now covers the FP32-K-cycle-AMG path across 1/4/16
+  threads.
+- **[CORE] Double-Galerkin build removed.** The self-coarsening ctor now retains
+  the Galerkin operators it forms during descent and hands them to `build()`
+  instead of recomputing them (the `coo_to_csr` sort was ~83% of setup) —
+  advances open-thread #4.
+- **[BENCH] Counter honesty + methodology.** perf counters now read
+  `time_enabled/time_running` and scale for PMU multiplexing (no silent
+  under-count); the reference dispatch is now a timed variant (real
+  opt-vs-reference ratio); SpMV verification is multi-seed; `within()` doc
+  corrected to its real atol/rtol semantics.
+- **[TEST] Real-behavior gaps closed.** `nrm2` no longer asserts against its own
+  implementation; equilibration is tested on a non-uniform diagonal; the K-cycle
+  is verified to strictly accelerate the V-cycle on a graded operator (via a
+  stationary iteration, unmasked by the outer Krylov) — `poisson7_graded` added.
+
+Deferred (need a harness this session lacked — recorded so they are not lost):
+
+7. **[CORE, perf] Thread `cycle()`'s restriction/prolongation/residual.** These
+   run serial even under `Dispatch::openmp`, an Amdahl tax on the finest arrays.
+   The prolongation gather and residual subtraction are trivially parallel (and
+   determinism-safe: each writes a distinct index). DEFERRED as a *performance*
+   change: the performance policy requires counter evidence, which needs a
+   measured pass on halobox — do not ship it unmeasured.
+8. **[APP] `spumePCG` ignores `relTol`.** The inner FCG converges on
+   `||r|| <= tol·||b||` only; `relTol_` is never applied and the residual norm
+   differs from OpenFOAM's `solverPerformance` contract (over-solves `relTol`-
+   driven PIMPLE correctors). Fix needs validation on a real case (matched
+   stopping semantics), not a compile check — needs the OpenFOAM env.
+9. **[APP] AMG hierarchy cache is unsafe on dynamic meshes.** `g_amgCache` keys
+   on `&lduAddr()` + cell count; a reallocated addressing at the same address
+   with unchanged ncells (AMR/topo change on the `createDynamicFvMesh` flagship)
+   can false-hit and reuse a stale aggregation. Fold a topology-change signal
+   into the key; verify on a dynamic-mesh tutorial (needs the OpenFOAM env).
