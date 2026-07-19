@@ -13,9 +13,10 @@
 // Agreement is checked in the correctness class the numerics policy defines
 // (AGENTS.md): a same-precision reordering variant (e.g. OpenMP SELL with
 // fixed per-chunk accumulation order) must match BITWISE; a reduced-precision
-// variant (FP32 preconditioner kernel) must match within an explicit ULP/abs
-// tolerance the caller states. The harness never invents a tolerance — the
-// caller declares the class, matching how the regression comparator works.
+// variant (FP32 preconditioner kernel) must match within an explicit
+// absolute+relative tolerance (atol + rtol*|ref|, elementwise) the caller
+// states. The harness never invents a tolerance — the caller declares the
+// class, matching how the regression comparator works.
 //
 // Usage:
 //   checkasm::Case c{"spmv", n};                 // label + element count
@@ -23,7 +24,7 @@
 //   c.variant("openmp", [&]{ spmv(a, x, y, omp); },  // fills y
 //             checkasm::exact(y_ref, y));            // bitwise class
 //   c.variant("nt-store", [&]{ spmv_nt(a, x, y); },
-//             checkasm::within(y_ref, y, 0, 4));     // 4-ULP reduced class
+//             checkasm::within(y_ref, y, 1e-6, 1e-5)); // atol/rtol reduced class
 //   c.report();
 //
 // Verification runs first (once); timing follows only for variants that pass.
@@ -76,10 +77,10 @@ inline Verifier exact(std::span<const double> ref, std::span<const double> got) 
     };
 }
 
-// Reduced-precision class: |got-ref| <= atol + rtol*|ref| elementwise, plus a
-// ULP ceiling. For a preconditioner-internal FP32 kernel under a flexible
-// outer Krylov the result need only be *close* (it accelerates, not defines),
-// so the caller states how close is legitimate — never the harness.
+// Reduced-precision class: |got-ref| <= atol + rtol*|ref| elementwise. For a
+// preconditioner-internal FP32 kernel under a flexible outer Krylov the result
+// need only be *close* (it accelerates, not defines), so the caller states how
+// close is legitimate (both tolerances) — never the harness.
 inline Verifier within(std::span<const double> ref, std::span<const double> got,
                        double atol, double rtol) {
     return [ref, got, atol, rtol](std::string& reason) {

@@ -383,16 +383,48 @@ void run_checkasm(spume::index_t nx, spume::index_t ny, spume::index_t nz, int r
     const auto a = spume::sell_from_csr(csr);
     const auto n = static_cast<std::size_t>(a.nrows);
     const auto x = random_vec(n, 11);
-    std::vector<double> y_ref(n), y_omp(n);
+    std::vector<double> y_ref(n), y_omp(n), y_refv(n);
 
     std::printf("== checkasm: poisson7 %dx%dx%d, n=%zu, nnz=%lld ==\n", nx, ny, nz, n,
                 static_cast<long long>(a.nnz));
 
+    // Randomized multi-seed verification (FFmpeg/checkasm discipline, ADR-0016):
+    // a reordering bug can be sensitive to particular sign/cancellation patterns,
+    // so agreement is proven across several inputs before the single-input timing
+    // below — one draw could miss it.
+    bool multiseed_ok = true;
+    for (unsigned seed : {11u, 101u, 1009u, 7919u, 50021u}) {
+        const auto xs = random_vec(n, seed);
+        spume::spmv(a, std::span<const double>(xs), std::span<double>(y_ref),
+                    spume::Dispatch::reference);
+        spume::spmv(a, std::span<const double>(xs), std::span<double>(y_omp),
+                    spume::Dispatch::openmp);
+        std::string reason;
+        if (!spume::checkasm::exact(y_ref, y_omp)(reason)) {
+            multiseed_ok = false;
+            std::printf("  multi-seed verify FAIL (seed %u): %s\n", seed, reason.c_str());
+            break;
+        }
+    }
+    if (multiseed_ok) {
+        std::printf("  multi-seed verify: openmp bitwise-identical to reference over 5 seeds\n");
+    }
+    g_sink += y_omp[n / 2];
+
+    // Time the reference too (as the first variant), so the speedup below is a
+    // real reference-vs-openmp ratio, not just openmp in isolation.
     spume::checkasm::Case c{"spmv", n, reps, 5};
     c.reference([&] {
         spume::spmv(a, std::span<const double>(x), std::span<double>(y_ref),
                     spume::Dispatch::reference);
     });
+    c.variant(
+        "reference",
+        [&] {
+            spume::spmv(a, std::span<const double>(x), std::span<double>(y_refv),
+                        spume::Dispatch::reference);
+        },
+        spume::checkasm::exact(y_ref, y_refv));
     // Same-precision, fixed-order reordering -> must match bitwise.
     c.variant(
         "openmp",
@@ -401,8 +433,8 @@ void run_checkasm(spume::index_t nx, spume::index_t ny, spume::index_t nz, int r
                         spume::Dispatch::openmp);
         },
         spume::checkasm::exact(y_ref, y_omp));
-    const bool ok = c.report();
-    g_sink += y_ref[n / 2] + y_omp[n / 2];
+    const bool ok = c.report() && multiseed_ok;
+    g_sink += y_ref[n / 2] + y_omp[n / 2] + y_refv[n / 2];
 
     // Optional hardware-counter view of the OpenMP kernel (degrades honestly).
     std::vector<spume::bench::CounterSpec> specs = {
