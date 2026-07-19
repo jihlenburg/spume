@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <span>
 #include <utility>
@@ -45,9 +46,11 @@ public:
     explicit AmgPrecond(const Csr& fine, ChebyshevOptions smoother_opt = {},
                         index_t coarse_size = 200, int max_levels = 20,
                         double coarse_tol = 1e-2, int coarse_max_iter = 500,
-                        Dispatch dispatch = Dispatch::reference)
+                        Dispatch dispatch = Dispatch::reference,
+                        bool kcycle = false, int kcycle_max_levels = 5)
         : coarse_tol_(coarse_tol), coarse_max_iter_(coarse_max_iter),
-          dispatch_(dispatch) {
+          dispatch_(dispatch), kcycle_(kcycle),
+          kcycle_max_levels_(kcycle_max_levels) {
         std::vector<Aggregation> aggs;
         Csr cur = fine;
         while (static_cast<int>(aggs.size()) + 1 < max_levels &&
@@ -71,14 +74,16 @@ public:
     AmgPrecond(const Csr& fine, const std::vector<Aggregation>& aggs,
                ChebyshevOptions smoother_opt = {},
                double coarse_tol = 1e-2, int coarse_max_iter = 500,
-               Dispatch dispatch = Dispatch::reference)
+               Dispatch dispatch = Dispatch::reference,
+               bool kcycle = false, int kcycle_max_levels = 5)
         : coarse_tol_(coarse_tol), coarse_max_iter_(coarse_max_iter),
-          dispatch_(dispatch) {
+          dispatch_(dispatch), kcycle_(kcycle),
+          kcycle_max_levels_(kcycle_max_levels) {
         build(fine, aggs, smoother_opt);
     }
 
     void apply(std::span<const double> r, std::span<double> z) const override {
-        vcycle(0, r, z);
+        coarse_solve(0, r, z);
     }
 
     int num_levels() const { return static_cast<int>(levels_.size()) + 1; }
@@ -89,19 +94,14 @@ private:
         std::optional<ChebyshevPrecond<T>> smoother;
         Aggregation agg;
         mutable std::vector<double> res, az, sm, rc, ec;
+        mutable std::vector<double> kc, kv, kd, kw, kr; // K-cycle workspace
     };
 
-    void vcycle(std::size_t lvl, std::span<const double> r, std::span<double> z) const {
-        if (lvl == levels_.size()) {
-            // coarsest level: FP64 CG (initial guess 0)
-            std::fill(z.begin(), z.end(), 0.0);
-            SolveOptions co;
-            co.tol = coarse_tol_;
-            co.max_iter = coarse_max_iter_;
-            co.dispatch = dispatch_;
-            cg(coarsest_, r, z, co);
-            return;
-        }
+    // One multigrid cycle at level lvl: pre-smooth, restrict, coarse-correct,
+    // prolong, post-smooth. The coarse correction is handled by coarse_solve,
+    // which is a single recursive cycle (V-cycle) or a short Krylov acceleration
+    // over recursive cycles (K-cycle).
+    void cycle(std::size_t lvl, std::span<const double> r, std::span<double> z) const {
         const Level& lev = levels_[lvl];
 
         // pre-smooth: z <- S(r)  (equivalent to one smoothing step from z = 0)
@@ -116,7 +116,7 @@ private:
 
         // coarse-grid correction: solve on the next level, ec starts 0
         std::fill(lev.ec.begin(), lev.ec.end(), 0.0);
-        vcycle(lvl + 1, std::span<const double>(lev.rc), std::span<double>(lev.ec));
+        coarse_solve(lvl + 1, std::span<const double>(lev.rc), std::span<double>(lev.ec));
 
         // prolong: z += P ec
         for (index_t i = 0; i < lev.a.nrows; ++i) {
@@ -129,6 +129,100 @@ private:
         for (std::size_t i = 0; i < r.size(); ++i) {
             z[i] += lev.sm[i];
         }
+    }
+
+    // Approximately solve A_lvl x = b. On the coarsest level this is the FP64 CG
+    // solve. Above it, kcycle_ selects the coarse-correction strength:
+    //   V-cycle : one recursive cycle (x = cycle(b)).
+    //   K-cycle : project the correction onto span{c, d}, where c = cycle(b) and
+    //             d = cycle(b - alpha A c) (Notay's aggregation-AMG K-cycle,
+    //             Galerkin/Ritz over the two directions). A residual test skips
+    //             the second direction — and its whole recursive subtree — when
+    //             the first already cuts the residual by >=4x, which keeps the
+    //             K-cycle near-linear instead of exponential in the level count.
+    // The transfer operators are unsmoothed aggregation, for which a plain
+    // V-cycle degrades with problem size; the Krylov wrap is what recovers a
+    // mesh-independent, GAMG-class convergence rate.
+    void coarse_solve(std::size_t lvl, std::span<const double> b,
+                      std::span<double> x) const {
+        if (lvl == levels_.size()) {
+            std::fill(x.begin(), x.end(), 0.0);
+            SolveOptions co;
+            co.tol = coarse_tol_;
+            co.max_iter = coarse_max_iter_;
+            co.dispatch = dispatch_;
+            cg(coarsest_, b, x, co);
+            return;
+        }
+        // K-cycle on a window of coarse levels [1 .. kcycle_max_levels_]:
+        //  - Skip the finest level (lvl 0): the outer flexible-CG already
+        //    Krylov-accelerates the finest grid, so K-accelerating it is
+        //    redundant AND doubles passes over the largest (bandwidth-bound)
+        //    arrays — the dominant per-iteration cost. Level 0 stays a plain
+        //    V-cycle; its coarse correction (lvl 1+) is where K kicks in.
+        //  - Cap the depth: the coarse-space (weak-approximation) deficiency of
+        //    unsmoothed aggregation is worst at the finest coarse levels; deeper
+        //    levels recover with a plain V-cycle. The cap bounds the recursive
+        //    fan-out to ~2^kcycle_max_levels_ instead of 2^numLevels — bounded
+        //    vs runaway on a deep (pairwise) hierarchy.
+        if (!kcycle_ || lvl == 0 || static_cast<int>(lvl) > kcycle_max_levels_) {
+            cycle(lvl, b, x);
+            return;
+        }
+        const Level& lev = levels_[lvl];
+        const std::size_t n = b.size();
+
+        // c = M b (one recursive cycle), v = A c
+        cycle(lvl, b, std::span<double>(lev.kc));
+        spmv(lev.a, std::span<const double>(lev.kc), std::span<double>(lev.kv), dispatch_);
+        const double rho1 = ddot(lev.kc, b);
+        const double sig1 = ddot(lev.kc, lev.kv);
+        if (!(sig1 > 0.0)) { // not SPD-usable here: take the plain cycle result
+            std::copy(lev.kc.begin(), lev.kc.end(), x.begin());
+            return;
+        }
+        const double alpha = rho1 / sig1;
+
+        // r1 = b - alpha v ; the residual test decides on a second direction.
+        double nb = 0.0, nr = 0.0;
+        for (std::size_t i = 0; i < n; ++i) {
+            lev.kr[i] = b[i] - alpha * lev.kv[i];
+            nb += b[i] * b[i];
+            nr += lev.kr[i] * lev.kr[i];
+        }
+        if (nr <= 0.0625 * nb) { // ||r1|| <= 0.25 ||b|| : one term is enough
+            for (std::size_t i = 0; i < n; ++i) {
+                x[i] = alpha * lev.kc[i];
+            }
+            return;
+        }
+
+        // second direction d = M r1, w = A d ; Galerkin projection onto {c, d}.
+        cycle(lvl, std::span<const double>(lev.kr), std::span<double>(lev.kd));
+        spmv(lev.a, std::span<const double>(lev.kd), std::span<double>(lev.kw), dispatch_);
+        const double gam = ddot(lev.kc, lev.kw); // <c, A d> = <d, A c>
+        const double bet = ddot(lev.kd, lev.kw); // <d, A d>
+        const double rho2 = ddot(lev.kd, b);     // <d, b>
+        const double det = sig1 * bet - gam * gam;
+        if (!(std::abs(det) > 0.0)) { // directions dependent: fall back to one
+            for (std::size_t i = 0; i < n; ++i) {
+                x[i] = alpha * lev.kc[i];
+            }
+            return;
+        }
+        const double a1 = (rho1 * bet - gam * rho2) / det;
+        const double a2 = (sig1 * rho2 - gam * rho1) / det;
+        for (std::size_t i = 0; i < n; ++i) {
+            x[i] = a1 * lev.kc[i] + a2 * lev.kd[i];
+        }
+    }
+
+    static double ddot(std::span<const double> a, std::span<const double> b) {
+        double s = 0.0;
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            s += a[i] * b[i];
+        }
+        return s;
     }
 
     static std::size_t agg_of(const Level& lev, index_t i) {
@@ -163,6 +257,11 @@ private:
             lev.sm.resize(n);
             lev.rc.resize(nc);
             lev.ec.resize(nc);
+            lev.kc.resize(n);
+            lev.kv.resize(n);
+            lev.kd.resize(n);
+            lev.kw.resize(n);
+            lev.kr.resize(n);
             Csr coarse = galerkin(cur, agg);
             lev.agg = agg;
             levels_.push_back(std::move(lev));
@@ -176,6 +275,8 @@ private:
     double coarse_tol_;
     int coarse_max_iter_;
     Dispatch dispatch_ = Dispatch::reference;
+    bool kcycle_ = false;
+    int kcycle_max_levels_ = 5; // K-accelerate the top few coarse levels
 };
 
 } // namespace spume

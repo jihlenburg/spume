@@ -220,6 +220,17 @@ Foam::solverPerformance Foam::spumePCG::solve
                 static_cast<double>(controlDict_.getOrDefault<scalar>("chebyshevEta", 30.0));
             const double coarseTol =
                 static_cast<double>(controlDict_.getOrDefault<scalar>("amgCoarseTol", 1e-2));
+            // K-cycle (Krylov-accelerated coarse correction) vs plain V-cycle.
+            // The unsmoothed-aggregation V-cycle degrades with problem size; the
+            // K-cycle recovers a mesh-independent, GAMG-class rate. Default true
+            // — it is a strict convergence improvement at the same FP64 answer
+            // (the outer Krylov firewall is unchanged). Opt out: spumeKcycle false.
+            const bool kcycle = controlDict_.getOrDefault<bool>("spumeKcycle", true);
+            // Number of finest coarse levels that get Krylov acceleration. Small
+            // (2) bounds the K-cycle fan-out on deep hierarchies while capturing
+            // the coarse-space correction where it matters most.
+            const int kcycleLevels =
+                static_cast<int>(controlDict_.getOrDefault<label>("spumeKcycleLevels", 5));
 
             if (pc == "chebyshevFP32")
             {
@@ -231,11 +242,11 @@ Foam::solverPerformance Foam::spumePCG::solve
             else if (pc == "amgFP32")
             {
                 // FP32 algebraic multigrid with SPUME's own greedy coarsening.
-                precond = std::make_unique<spume::AmgPrecond<float>>(csr, copt, 200, 20, coarseTol, 500, disp);
+                precond = std::make_unique<spume::AmgPrecond<float>>(csr, copt, 200, 20, coarseTol, 500, disp, kcycle, kcycleLevels);
             }
             else if (pc == "amgFP64")
             {
-                precond = std::make_unique<spume::AmgPrecond<double>>(csr, copt, 200, 20, coarseTol, 500, disp);
+                precond = std::make_unique<spume::AmgPrecond<double>>(csr, copt, 200, 20, coarseTol, 500, disp, kcycle, kcycleLevels);
             }
             else if (pc == "gamgFP32" || pc == "gamgFP64")
             {
@@ -259,11 +270,11 @@ Foam::solverPerformance Foam::spumePCG::solve
 
                 if (pc == "gamgFP32")
                 {
-                    precond = std::make_unique<spume::AmgPrecond<float>>(csr, hierarchy, copt, coarseTol, 500, disp);
+                    precond = std::make_unique<spume::AmgPrecond<float>>(csr, hierarchy, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
                 }
                 else
                 {
-                    precond = std::make_unique<spume::AmgPrecond<double>>(csr, hierarchy, copt, coarseTol, 500, disp);
+                    precond = std::make_unique<spume::AmgPrecond<double>>(csr, hierarchy, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
                 }
             }
             else

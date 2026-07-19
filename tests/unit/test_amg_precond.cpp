@@ -61,6 +61,55 @@ TEST_CASE("multi-level AMG preconditioner solves and accelerates fcg") {
     }
 }
 
+TEST_CASE("K-cycle accelerates the V-cycle and reaches the same answer") {
+    const spume::Csr a = spume::coo_to_csr(spume::gen::poisson7(32, 32, 32));
+    const spume::Sell<double> A = spume::sell_from_csr(a);
+    const auto n = static_cast<std::size_t>(a.nrows);
+
+    std::vector<double> b(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        b[i] = 0.5 - static_cast<double>(i % 13) * 0.1;
+    }
+    spume::SolveOptions opt;
+    opt.tol = 1e-8;
+    opt.max_iter = 4000;
+
+    // Plain V-cycle (kcycle = false) vs Krylov-accelerated K-cycle. The K-cycle
+    // wraps the coarse correction in a short flexible-CG, recovering a stronger
+    // (mesh-independent) coarse-grid correction on the same unsmoothed-
+    // aggregation hierarchy — so it must not need MORE outer iterations, and on
+    // this anisotropy-free operator reaches the identical FP64 answer.
+    const spume::AmgPrecond<double> vcycle(
+        a, {}, 200, 20, 1e-2, 500, spume::Dispatch::reference, /*kcycle=*/false);
+    std::vector<double> xv(n, 0.0);
+    const spume::SolveResult rv =
+        spume::fcg(A, vcycle, std::span<const double>(b), std::span<double>(xv), opt);
+    REQUIRE(rv.converged);
+
+    const spume::AmgPrecond<double> kcyc(
+        a, {}, 200, 20, 1e-2, 500, spume::Dispatch::reference, /*kcycle=*/true);
+    std::vector<double> xk(n, 0.0);
+    const spume::SolveResult rk =
+        spume::fcg(A, kcyc, std::span<const double>(b), std::span<double>(xk), opt);
+    CHECK(rk.converged);
+    CHECK(rk.iterations <= rv.iterations); // Krylov coarse correction never hurts
+    for (std::size_t i = 0; i < n; ++i) {
+        CHECK(xk[i] == doctest::Approx(xv[i]).epsilon(1e-5));
+    }
+
+    // FP32 K-cycle: the full production path (mixed precision + K-cycle) still
+    // lands on the FP64 answer (the outer-Krylov firewall, ADR-0002).
+    const spume::AmgPrecond<float> kcyc32(
+        a, {}, 200, 20, 1e-2, 500, spume::Dispatch::reference, /*kcycle=*/true);
+    std::vector<double> xk32(n, 0.0);
+    const spume::SolveResult rk32 =
+        spume::fcg(A, kcyc32, std::span<const double>(b), std::span<double>(xk32), opt);
+    CHECK(rk32.converged);
+    for (std::size_t i = 0; i < n; ++i) {
+        CHECK(xk32[i] == doctest::Approx(xv[i]).epsilon(1e-5));
+    }
+}
+
 TEST_CASE("AMG accepts an externally-supplied hierarchy (the GAMG-reuse path)") {
     const spume::Csr a = spume::coo_to_csr(spume::gen::poisson7(24, 24, 24));
     const spume::Sell<double> A = spume::sell_from_csr(a);
