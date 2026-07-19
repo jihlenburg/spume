@@ -47,9 +47,10 @@ public:
                         index_t coarse_size = 200, int max_levels = 20,
                         double coarse_tol = 1e-2, int coarse_max_iter = 500,
                         Dispatch dispatch = Dispatch::reference,
-                        bool kcycle = false, int kcycle_max_levels = 5)
+                        bool kcycle = false, int kcycle_max_levels = 5,
+                        Reduction reduction = Reduction::standard)
         : coarse_tol_(coarse_tol), coarse_max_iter_(coarse_max_iter),
-          dispatch_(dispatch), kcycle_(kcycle),
+          dispatch_(dispatch), reduction_(reduction), kcycle_(kcycle),
           kcycle_max_levels_(kcycle_max_levels) {
         std::vector<Aggregation> aggs;
         Csr cur = fine;
@@ -75,9 +76,10 @@ public:
                ChebyshevOptions smoother_opt = {},
                double coarse_tol = 1e-2, int coarse_max_iter = 500,
                Dispatch dispatch = Dispatch::reference,
-               bool kcycle = false, int kcycle_max_levels = 5)
+               bool kcycle = false, int kcycle_max_levels = 5,
+               Reduction reduction = Reduction::standard)
         : coarse_tol_(coarse_tol), coarse_max_iter_(coarse_max_iter),
-          dispatch_(dispatch), kcycle_(kcycle),
+          dispatch_(dispatch), reduction_(reduction), kcycle_(kcycle),
           kcycle_max_levels_(kcycle_max_levels) {
         build(fine, aggs, smoother_opt);
     }
@@ -151,6 +153,7 @@ private:
             co.tol = coarse_tol_;
             co.max_iter = coarse_max_iter_;
             co.dispatch = dispatch_;
+            co.reduction = reduction_; // preserve cross-thread bitwise reproducibility
             cg(coarsest_, b, x, co);
             return;
         }
@@ -275,6 +278,10 @@ private:
     double coarse_tol_;
     int coarse_max_iter_;
     Dispatch dispatch_ = Dispatch::reference;
+    // Reduction mode for the coarsest-level FP64 CG. Threaded through so a
+    // deterministic outer solve stays bitwise-reproducible across thread counts
+    // (numerics policy) — the coarse CG is the one reduction inside the cycle.
+    Reduction reduction_ = Reduction::standard;
     bool kcycle_ = false;
     int kcycle_max_levels_ = 5; // K-accelerate the top few coarse levels
 };

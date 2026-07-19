@@ -16,6 +16,7 @@
 
 #include <omp.h>
 
+#include "core/amg_precond.hpp"
 #include "core/equilibrate.hpp"
 #include "core/poisson.hpp"
 #include "core/precond.hpp"
@@ -89,6 +90,31 @@ TEST_CASE("deterministic mode: identical bits across 1/4/16 threads") {
             std::vector<double> xt(n, 0.0);
             const auto rt =
                 spume::fcg(a, spume::ChebyshevPrecond<float>(op32, {}, opt.dispatch), b, xt, opt);
+            CAPTURE(threads);
+            CHECK(rt.converged);
+            CHECK(rt.iterations == r1.iterations);
+            CHECK(bitwise_equal(xt, x1));
+        }
+    }
+
+    SUBCASE("FCG with FP32 AMG preconditioner (K-cycle)") {
+        // The flagship path: FP32 K-cycle AMG under the FP64 outer FCG. The only
+        // thread-count-varying reduction inside the cycle is the coarsest-level
+        // FP64 CG, so the AmgPrecond must run it in deterministic mode too.
+        const spume::AmgPrecond<float> amg(
+            csr, /*smoother_opt=*/{}, /*coarse_size=*/200, /*max_levels=*/20,
+            /*coarse_tol=*/1e-2, /*coarse_max_iter=*/500, opt.dispatch,
+            /*kcycle=*/true, /*kcycle_max_levels=*/5, opt.reduction);
+
+        std::vector<double> x1(n, 0.0);
+        omp_set_num_threads(1);
+        const auto r1 = spume::fcg(a, amg, b, x1, opt);
+        REQUIRE(r1.converged);
+
+        for (int threads : {4, 16}) {
+            omp_set_num_threads(threads);
+            std::vector<double> xt(n, 0.0);
+            const auto rt = spume::fcg(a, amg, b, xt, opt);
             CAPTURE(threads);
             CHECK(rt.converged);
             CHECK(rt.iterations == r1.iterations);
