@@ -1,12 +1,19 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 Joern Ihlenburg */
 
-/* SPUME_PROJECT_DIR is exported by scripts/foam-env.sh; it provides the compat
- * shim (src/compat/ldu.hpp). lduMatrix.H resolves via the OpenFOAM lnInclude
- * paths wmake adds automatically. Stage 0 needs only libOpenFOAM. */
+/* SPUME_PROJECT_DIR + SPUME_BUILD_DIR are exported by scripts/foam-env.sh (and
+ * by the equivalence runner). The shim (src/compat/ldu.hpp) and the M0 core /
+ * LDU->SELL bridge headers come from src/; the compiled core/bridge static libs
+ * come from the CMake build tree (built position-independent). -std=c++2a is
+ * required for std::span in the bridge header (overrides wmake's default
+ * -std=c++17: the last -std wins); -fopenmp pulls the core's OpenMP runtime. */
 
 EXE_INC = \
+    -std=c++2a \
     -I$(SPUME_PROJECT_DIR)/src
 
 LIB_LIBS = \
+    -L$(SPUME_BUILD_DIR)/src/bridge -lspume-bridge \
+    -L$(SPUME_BUILD_DIR)/src/core -lspume-core \
+    -fopenmp \
     -lOpenFOAM

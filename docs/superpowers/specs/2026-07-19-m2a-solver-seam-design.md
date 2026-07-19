@@ -153,7 +153,21 @@ de-risked, well-scoped next task.
    is handled in a later M2 slice. Guard on whether any `interfaces_` entry is a
    coupled interface with non-zero boundary coefficients.
 
-Stage 1 status: **not implemented in the 2026-07-19 session** — stopped at the
-verified Stage-0 boundary rather than commit unverified numerics. Tasks 1–4
-(comparator mode, LDU shim, `ldu_to_sell` bridge, spumePCG Stage-0 passthrough)
-are complete and tested.
+Stage 1 status: **implemented and verified (2026-07-19).** `spumePCG` now solves
+via the M0 flexible CG + diagonal Jacobi over the SELL bridge. All three
+requirements above were handled, plus one more found by running:
+
+- **Sign convention:** OpenFOAM assembles the pressure matrix *negative*-definite
+  (negative diagonal). The SPUME core CG/Jacobi need SPD, so `spumePCG` solves
+  the negated system `(-A) x = (-b)` (same `x`, positive diagonal), detected
+  from the diagonal sign. Without this, `1/sqrt(diag<0)` produced NaN → SIGFPE
+  under OpenFOAM's FP trapping.
+- **Result (measured, pitzDaily-pimple, both tight):** identical `p` and `U` to
+  ~1e-8 absolute / ~1e-9 relative — well inside the rounding-reorder class.
+  931 Jacobi-CG iterations vs 260 DICPCG confirms the SPUME solver actually ran
+  (not a fallback). Gate: `run_spumepcg_equivalence.sh` in reorder-tolerance
+  (rtol 1e-6, atol 1e-7), writePrecision 12 so the comparison reflects the true
+  numerics, not ascii truncation.
+- **Not a speedup claim:** unpreconditioned-vs-DIC iteration counts are not a
+  performance result (ADR-0013); M2a is correctness/plumbing only. A real FP32
+  preconditioner + counter evidence is a later M2 slice.

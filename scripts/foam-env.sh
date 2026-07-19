@@ -21,6 +21,11 @@
 SPUME_PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 export SPUME_PROJECT_DIR
 
+# CMake build tree holding the SPUME core/bridge static libs that M2 solver
+# libraries (applications/libs) link against. Override for a different preset.
+: "${SPUME_BUILD_DIR:=$SPUME_PROJECT_DIR/build/cpu-release}"
+export SPUME_BUILD_DIR
+
 : "${OPENFOAM_BASHRC:=$HOME/OpenFOAM/OpenFOAM-v2606/etc/bashrc}"
 
 if [ ! -f "$OPENFOAM_BASHRC" ]; then

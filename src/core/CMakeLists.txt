@@ -16,3 +16,7 @@ target_include_directories(spume-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(spume-core
     PUBLIC OpenMP::OpenMP_CXX
     PRIVATE spume-warnings spume-arch)
+
+# The M2 solver library (wmake, shared object) links this static lib, so its
+# objects must be position-independent.
+set_target_properties(spume-core PROPERTIES POSITION_INDEPENDENT_CODE ON)
