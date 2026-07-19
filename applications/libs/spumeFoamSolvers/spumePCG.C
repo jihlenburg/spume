@@ -4,6 +4,7 @@
 #include "spumePCG.H"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <span>
@@ -157,6 +158,13 @@ Foam::solverPerformance Foam::spumePCG::solve
         spume::SolveOptions opt;
         opt.tol = static_cast<double>(tolerance_);
         opt.max_iter = (maxIter_ > 0 ? static_cast<int>(maxIter_) : 1000);
+        // Threaded (OpenMP) SELL kernels by default. openmp is bit-identical to
+        // the reference path (SELL fixed-order accumulation), so this is pure
+        // parallelisation, not a different numerical path (invariant #4 holds).
+        const spume::Dispatch disp =
+            controlDict_.getOrDefault<bool>("spumeThreaded", true)
+                ? spume::Dispatch::openmp : spume::Dispatch::reference;
+        opt.dispatch = disp;
 
         std::vector<double> x(psi.begin(), psi.begin() + nCells);
         std::vector<double> b(static_cast<std::size_t>(nCells));
@@ -174,6 +182,7 @@ Foam::solverPerformance Foam::spumePCG::solve
         const word pc =
             controlDict_.getOrDefault<word>("spumePreconditioner", "jacobi");
 
+        const auto tSetup0 = std::chrono::steady_clock::now();
         std::unique_ptr<spume::Preconditioner> precond;
         if (pc == "jacobi")
         {
@@ -184,7 +193,7 @@ Foam::solverPerformance Foam::spumePCG::solve
                 eq.scale[static_cast<std::size_t>(i)] =
                     1.0/std::sqrt(sdiag[static_cast<std::size_t>(i)]);
             }
-            precond = std::make_unique<spume::JacobiPrecond<double>>(eq);
+            precond = std::make_unique<spume::JacobiPrecond<double>>(eq, disp);
         }
         else
         {
@@ -209,17 +218,17 @@ Foam::solverPerformance Foam::spumePCG::solve
                     static_cast<double>(controlDict_.getOrDefault<scalar>("chebyshevEta", 30.0));
                 precond = std::make_unique<spume::ChebyshevPrecond<float>>
                 (
-                    spume::make_eq_operator<float>(csr), copt
+                    spume::make_eq_operator<float>(csr), copt, disp
                 );
             }
             else if (pc == "amgFP32")
             {
                 // FP32 algebraic multigrid with SPUME's own greedy coarsening.
-                precond = std::make_unique<spume::AmgPrecond<float>>(csr);
+                precond = std::make_unique<spume::AmgPrecond<float>>(csr, spume::ChebyshevOptions{}, 200, 20, 1e-2, 500, disp);
             }
             else if (pc == "amgFP64")
             {
-                precond = std::make_unique<spume::AmgPrecond<double>>(csr);
+                precond = std::make_unique<spume::AmgPrecond<double>>(csr, spume::ChebyshevOptions{}, 200, 20, 1e-2, 500, disp);
             }
             else if (pc == "gamgFP32" || pc == "gamgFP64")
             {
@@ -243,11 +252,11 @@ Foam::solverPerformance Foam::spumePCG::solve
 
                 if (pc == "gamgFP32")
                 {
-                    precond = std::make_unique<spume::AmgPrecond<float>>(csr, hierarchy);
+                    precond = std::make_unique<spume::AmgPrecond<float>>(csr, hierarchy, spume::ChebyshevOptions{}, 1e-2, 500, disp);
                 }
                 else
                 {
-                    precond = std::make_unique<spume::AmgPrecond<double>>(csr, hierarchy);
+                    precond = std::make_unique<spume::AmgPrecond<double>>(csr, hierarchy, spume::ChebyshevOptions{}, 1e-2, 500, disp);
                 }
             }
             else
@@ -259,6 +268,7 @@ Foam::solverPerformance Foam::spumePCG::solve
             }
         }
 
+        const auto tSetup1 = std::chrono::steady_clock::now();
         const spume::SolveResult res = spume::fcg
         (
             a,
@@ -267,6 +277,21 @@ Foam::solverPerformance Foam::spumePCG::solve
             std::span<double>(x),
             opt
         );
+        const auto tSolve1 = std::chrono::steady_clock::now();
+
+        // Per-phase attribution (setup = preconditioner/hierarchy build, solve =
+        // the flexible-CG loop). Printed at log level >= 1 so a run self-reports
+        // where its time went without post-hoc log forensics.
+        if (log_ >= 1)
+        {
+            using ms = std::chrono::duration<double, std::milli>;
+            Info<< "spumePCG[" << pc << "]: setup "
+                << ms(tSetup1 - tSetup0).count() << " ms, solve "
+                << ms(tSolve1 - tSetup1).count() << " ms, "
+                << res.iterations << " iters ("
+                << (disp == spume::Dispatch::openmp ? "openmp" : "reference")
+                << ")" << endl;
+        }
 
         std::copy(x.begin(), x.end(), psi.begin());
 

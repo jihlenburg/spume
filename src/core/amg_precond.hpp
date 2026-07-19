@@ -44,8 +44,10 @@ public:
     // Self-coarsening: build the hierarchy with SPUME's own greedy aggregation.
     explicit AmgPrecond(const Csr& fine, ChebyshevOptions smoother_opt = {},
                         index_t coarse_size = 200, int max_levels = 20,
-                        double coarse_tol = 1e-2, int coarse_max_iter = 500)
-        : coarse_tol_(coarse_tol), coarse_max_iter_(coarse_max_iter) {
+                        double coarse_tol = 1e-2, int coarse_max_iter = 500,
+                        Dispatch dispatch = Dispatch::reference)
+        : coarse_tol_(coarse_tol), coarse_max_iter_(coarse_max_iter),
+          dispatch_(dispatch) {
         std::vector<Aggregation> aggs;
         Csr cur = fine;
         while (static_cast<int>(aggs.size()) + 1 < max_levels &&
@@ -68,8 +70,10 @@ public:
     // "reuse the trunk, own the kernels" path (ADR-0001).
     AmgPrecond(const Csr& fine, const std::vector<Aggregation>& aggs,
                ChebyshevOptions smoother_opt = {},
-               double coarse_tol = 1e-2, int coarse_max_iter = 500)
-        : coarse_tol_(coarse_tol), coarse_max_iter_(coarse_max_iter) {
+               double coarse_tol = 1e-2, int coarse_max_iter = 500,
+               Dispatch dispatch = Dispatch::reference)
+        : coarse_tol_(coarse_tol), coarse_max_iter_(coarse_max_iter),
+          dispatch_(dispatch) {
         build(fine, aggs, smoother_opt);
     }
 
@@ -94,6 +98,7 @@ private:
             SolveOptions co;
             co.tol = coarse_tol_;
             co.max_iter = coarse_max_iter_;
+            co.dispatch = dispatch_;
             cg(coarsest_, r, z, co);
             return;
         }
@@ -132,7 +137,7 @@ private:
 
     void residual(const Level& lev, std::span<const double> r,
                   std::span<const double> z) const {
-        spmv(lev.a, z, std::span<double>(lev.az));
+        spmv(lev.a, z, std::span<double>(lev.az), dispatch_);
         for (std::size_t i = 0; i < r.size(); ++i) {
             lev.res[i] = r[i] - lev.az[i];
         }
@@ -150,7 +155,7 @@ private:
             }
             Level lev;
             lev.a = sell_from_csr(cur);
-            lev.smoother.emplace(make_eq_operator<T>(cur), smoother_opt);
+            lev.smoother.emplace(make_eq_operator<T>(cur), smoother_opt, dispatch_);
             const auto n = static_cast<std::size_t>(cur.nrows);
             const auto nc = static_cast<std::size_t>(agg.ncoarse);
             lev.res.resize(n);
@@ -170,6 +175,7 @@ private:
     Sell<double> coarsest_;
     double coarse_tol_;
     int coarse_max_iter_;
+    Dispatch dispatch_ = Dispatch::reference;
 };
 
 } // namespace spume
