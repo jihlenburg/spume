@@ -13,6 +13,12 @@ from here instead.
 - `pimple.hpp` — upstream API surface for the incompressible PIMPLE solver
   family, consumed by `applications/spumePimpleFoam`. Add a sibling header
   per solver family rather than a raw include in leaf code.
+- `ldu.hpp` — the lower **matrix layer**: `lduMatrix`, `lduMatrix::solver` and
+  its runtime selection tables, `solverPerformance`, `scalarField`. Consumed by
+  runtime-selectable SPUME solver libraries (e.g. `spumePCG` in
+  `applications/libs/spumeFoamSolvers`). Deliberately does **not** include
+  `foam.hpp` (the fvCFD umbrella): a linear solver needs the matrix API, not the
+  whole FV framework, so libraries built on it link against libOpenFOAM alone.
 
 ## Scope of the "no direct upstream include" rule
 
