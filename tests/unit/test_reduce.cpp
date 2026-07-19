@@ -85,9 +85,17 @@ TEST_CASE("dot: deterministic mode is accurate, not just reproducible") {
     CHECK(det == doctest::Approx(static_cast<double>(ref)).epsilon(1e-12));
 }
 
-TEST_CASE("nrm2 matches sqrt(dot)") {
+TEST_CASE("nrm2 equals the Euclidean norm from an independent reference") {
+    // Independent oracle: sqrt of a long-double sum of squares, NOT spume::dot
+    // (nrm2 delegates to dot, so comparing to dot would assert nothing).
     auto x = make_data(777, 7);
-    CHECK(spume::nrm2(x) == std::sqrt(spume::dot(x, x)));
+    long double ss = 0.0L;
+    for (double v : x) {
+        ss += static_cast<long double>(v) * static_cast<long double>(v);
+    }
+    const double ref = static_cast<double>(std::sqrt(ss));
+    CHECK(spume::nrm2(x) == doctest::Approx(ref).epsilon(1e-12));
+    CHECK(spume::nrm2(x) >= 0.0);
 }
 
 TEST_CASE("vecops: axpy/aypx/axpby match scalar loops and are dispatch-invariant") {

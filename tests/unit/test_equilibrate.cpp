@@ -33,6 +33,49 @@ TEST_CASE("equilibrated operator has unit diagonal and preserves symmetry") {
     }
 }
 
+TEST_CASE("equilibration scales each row by its own diagonal (non-uniform diagonal)") {
+    // poisson7 has a constant diagonal (6), so every scale is 1/sqrt(6) and a
+    // bug that applied a single GLOBAL scale would pass. This tridiagonal matrix
+    // has a varying diagonal (d_r = 4 + r, all distinct), so per-row scaling
+    // s_r = 1/sqrt(a_rr) is distinguishable from any constant — the hard-rule
+    // path (equilibration before demotion) must scale each row independently.
+    const spume::index_t n = 64; // multiple of the SELL chunk height (no padding)
+    spume::Coo m;
+    m.nrows = n;
+    m.ncols = n;
+    auto diag = [](spume::index_t r) { return 4.0 + static_cast<double>(r); };
+    for (spume::index_t r = 0; r < n; ++r) {
+        m.row.push_back(r);
+        m.col.push_back(r);
+        m.val.push_back(diag(r)); // strictly diagonally dominant (>= 4 > 2) => SPD
+        if (r + 1 < n) {          // symmetric off-diagonals
+            m.row.push_back(r); m.col.push_back(r + 1); m.val.push_back(-1.0);
+            m.row.push_back(r + 1); m.col.push_back(r); m.val.push_back(-1.0);
+        }
+    }
+
+    const auto csr = spume::coo_to_csr(m);
+    const auto op = spume::make_eq_operator<double>(csr);
+
+    REQUIRE(op.scale.size() == static_cast<std::size_t>(n));
+    for (spume::index_t r = 0; r < n; ++r) {
+        CHECK(op.scale[static_cast<std::size_t>(r)] ==
+              doctest::Approx(1.0 / std::sqrt(diag(r))).epsilon(1e-14));
+    }
+    // The scales must genuinely differ — a single constant scale would satisfy
+    // the unit-diagonal check below only if all diagonals were equal.
+    CHECK(op.scale.front() != doctest::Approx(op.scale.back()));
+
+    // Equilibrated diagonal is 1 in every row (s_r * a_rr * s_r = 1).
+    std::vector<double> e(static_cast<std::size_t>(n), 0.0), col(static_cast<std::size_t>(n));
+    for (std::size_t i = 0; i < static_cast<std::size_t>(n); ++i) {
+        e[i] = 1.0;
+        spume::spmv(op.a, std::span<const double>(e), std::span<double>(col));
+        CHECK(col[i] == doctest::Approx(1.0).epsilon(1e-14));
+        e[i] = 0.0;
+    }
+}
+
 TEST_CASE("Gershgorin bound dominates Rayleigh quotients of S A S") {
     const auto csr = spume::coo_to_csr(spume::gen::poisson7(6, 6, 6));
     const auto op = spume::make_eq_operator<double>(csr);
