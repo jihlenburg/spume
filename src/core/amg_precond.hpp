@@ -53,6 +53,7 @@ public:
           dispatch_(dispatch), reduction_(reduction), kcycle_(kcycle),
           kcycle_max_levels_(kcycle_max_levels) {
         std::vector<Aggregation> aggs;
+        std::vector<Csr> coarse_ops; // retained so build() need not recompute
         Csr cur = fine;
         while (static_cast<int>(aggs.size()) + 1 < max_levels &&
                cur.nrows > coarse_size) {
@@ -62,9 +63,14 @@ public:
             }
             Csr coarse = galerkin(cur, agg);
             aggs.push_back(std::move(agg));
+            coarse_ops.push_back(coarse);
             cur = std::move(coarse);
         }
-        build(fine, aggs, smoother_opt);
+        // Hand build() the Galerkin products we just formed: recomputing them
+        // there (a coo_to_csr sort per level) is ~83% of per-solve setup, and
+        // this is the amortised path (roadmap M2). The external-hierarchy ctor
+        // has no such precomputed operators and lets build() form them.
+        build(fine, aggs, smoother_opt, &coarse_ops);
     }
 
     // External hierarchy: reuse a coarsening built elsewhere — e.g. OpenFOAM's
@@ -242,10 +248,17 @@ private:
 
     // Assemble the level operators + smoothers from a fine operator and an
     // ordered list of aggregations (each level's Galerkin product on the next).
+    // `precomputed`, when non-null, supplies the Galerkin coarse operator for
+    // each level (precomputed[k] is the level-(k+1) operator), so build() can
+    // move it in instead of recomputing galerkin(cur, agg). The self-coarsening
+    // ctor forms these during its descent; the external-hierarchy ctor passes
+    // null and build() forms them here.
     void build(const Csr& fine, const std::vector<Aggregation>& aggs,
-               ChebyshevOptions smoother_opt) {
+               ChebyshevOptions smoother_opt,
+               std::vector<Csr>* precomputed = nullptr) {
         Csr cur = fine;
-        for (const Aggregation& agg : aggs) {
+        for (std::size_t k = 0; k < aggs.size(); ++k) {
+            const Aggregation& agg = aggs[k];
             // guard a malformed external hierarchy: stop and treat cur as coarsest
             if (static_cast<std::size_t>(cur.nrows) != agg.agg.size()) {
                 break;
@@ -265,7 +278,8 @@ private:
             lev.kd.resize(n);
             lev.kw.resize(n);
             lev.kr.resize(n);
-            Csr coarse = galerkin(cur, agg);
+            Csr coarse = (precomputed != nullptr) ? std::move((*precomputed)[k])
+                                                  : galerkin(cur, agg);
             lev.agg = agg;
             levels_.push_back(std::move(lev));
             cur = std::move(coarse);
