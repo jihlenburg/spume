@@ -68,4 +68,21 @@ Csr galerkin(const Csr& a, const Aggregation& agg) {
     return coo_to_csr(c);
 }
 
+std::vector<Aggregation> aggregate_hierarchy(const Csr& fine, index_t coarse_size,
+                                             int max_levels, double theta) {
+    std::vector<Aggregation> aggs;
+    Csr cur = fine;
+    while (static_cast<int>(aggs.size()) + 1 < max_levels &&
+           cur.nrows > coarse_size) {
+        Aggregation agg = aggregate(cur, theta);
+        if (agg.ncoarse >= cur.nrows) {
+            break; // aggregation made no progress; stop coarsening
+        }
+        Csr coarse = galerkin(cur, agg);
+        aggs.push_back(std::move(agg));
+        cur = std::move(coarse);
+    }
+    return aggs;
+}
+
 } // namespace spume

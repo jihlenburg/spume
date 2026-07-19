@@ -45,4 +45,16 @@ Aggregation aggregate(const Csr& a, double theta = 0.25);
 // that makes it a valid coarse operator.
 Csr galerkin(const Csr& a, const Aggregation& agg);
 
+// Build the full aggregation hierarchy — the per-level aggregations produced by
+// repeated strength-based aggregation on successive Galerkin coarse operators,
+// down to `coarse_size` rows or `max_levels` levels. This is the STRUCTURE half
+// of AMG setup, and it is static across timesteps (mesh-driven): cache it once
+// and rebuild only the coefficient-dependent operators each solve — exactly how
+// GAMG reuses its agglomeration while recomputing coarse matrices — so the
+// preconditioner stays current instead of drifting toward the first matrix.
+std::vector<Aggregation> aggregate_hierarchy(const Csr& fine,
+                                             index_t coarse_size = 200,
+                                             int max_levels = 20,
+                                             double theta = 0.25);
+
 } // namespace spume

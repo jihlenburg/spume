@@ -50,6 +50,32 @@ bool hasCoupledInterface(const lduInterfaceFieldPtrsList& interfaces)
     return false;
 }
 
+//- Amortised AMG-aggregation cache. The costly part of AMG setup is the greedy
+// strength-based aggregation (a graph traversal over every level); the mesh
+// sparsity is static across a PIMPLE run, so the aggregation STRUCTURE is too.
+// Cache the per-level aggregations and rebuild only the coefficient-dependent
+// operators (Galerkin products + smoother) from the CURRENT matrix each solve —
+// exactly how stock GAMG reuses its GAMGAgglomeration MeshObject while
+// recomputing coarse matrices. Crucially the preconditioner therefore stays
+// CURRENT: caching the whole preconditioner instead (stale operators) blows up a
+// transient run as the coefficients drift (measured: 28 -> 900 iters by
+// timestep 3), which is exactly what this must not do.
+//
+// Single entry, keyed on the lduAddressing pointer (owned by the mesh, stable
+// for a static mesh) plus cell count and preconditioner name. The pressure solve
+// runs serially within PIMPLE and each MPI rank is its own process, so a
+// process-static cache needs no locking. The cached aggregations own their data
+// (no references into OpenFOAM), so they safely outlive the transient solver.
+struct AmgHierarchyCache
+{
+    const void* key = nullptr;
+    Foam::label ncells = -1;
+    Foam::word name;
+    std::vector<spume::Aggregation> aggs; // cached STRUCTURE (topology, static)
+    bool valid = false;
+};
+AmgHierarchyCache g_amgCache;
+
 } // End anonymous namespace
 } // End namespace Foam
 
@@ -183,7 +209,19 @@ Foam::solverPerformance Foam::spumePCG::solve
             controlDict_.getOrDefault<word>("spumePreconditioner", "jacobi");
 
         const auto tSetup0 = std::chrono::steady_clock::now();
-        std::unique_ptr<spume::Preconditioner> precond;
+
+        // Amortisation policy (see AmgHierarchyCache): cache the aggregation
+        // STRUCTURE (mesh-static topology) and rebuild the coefficient-dependent
+        // operators + smoother from the CURRENT matrix on every solve. This is
+        // how GAMG reuses its agglomeration while recomputing coarse matrices —
+        // the preconditioner stays current instead of drifting toward the first
+        // matrix, so a transient run's evolving coefficients cannot degrade it.
+        const bool amgCache = controlDict_.getOrDefault<bool>("spumeAmgCache", true);
+        const void* meshKey = static_cast<const void*>(&matrix_.lduAddr());
+
+        std::unique_ptr<spume::Preconditioner> localPrecond;
+        spume::Preconditioner* activePrecond = nullptr;
+
         if (pc == "jacobi")
         {
             spume::EqOperator<double> eq;
@@ -193,12 +231,13 @@ Foam::solverPerformance Foam::spumePCG::solve
                 eq.scale[static_cast<std::size_t>(i)] =
                     1.0/std::sqrt(sdiag[static_cast<std::size_t>(i)]);
             }
-            precond = std::make_unique<spume::JacobiPrecond<double>>(eq, disp);
+            localPrecond = std::make_unique<spume::JacobiPrecond<double>>(eq, disp);
         }
         else
         {
-            // Non-Jacobi preconditioners consume the negated SPD operator as
-            // CSR (equilibrated to FP32 for the mixed-precision paths, ADR-0002).
+            // Non-Jacobi preconditioners consume the negated SPD operator as CSR
+            // (equilibrated to FP32 for the mixed-precision paths, ADR-0002),
+            // rebuilt from the current matrix each solve.
             const spume::Csr csr = spume::assemble_csr
             (
                 std::span<const int>(lowerAddr.cdata(), lowerAddr.size()),
@@ -209,10 +248,8 @@ Foam::solverPerformance Foam::spumePCG::solve
                 static_cast<int>(nCells)
             );
 
-            // V-cycle smoother knobs, shared by every AMG path so the cheap
-            // cycle tweaks (more Chebyshev steps, spectral width, coarse-solve
-            // tolerance) are dictionary-tunable without a rebuild. Defaults
-            // reproduce the previous behaviour (steps 5, eta 30, coarse 1e-2).
+            // V-cycle smoother knobs, dictionary-tunable without a rebuild.
+            // Defaults reproduce the previous behaviour (steps 5, eta 30).
             spume::ChebyshevOptions copt;
             copt.steps =
                 static_cast<int>(controlDict_.getOrDefault<label>("chebyshevSteps", 5));
@@ -220,40 +257,58 @@ Foam::solverPerformance Foam::spumePCG::solve
                 static_cast<double>(controlDict_.getOrDefault<scalar>("chebyshevEta", 30.0));
             const double coarseTol =
                 static_cast<double>(controlDict_.getOrDefault<scalar>("amgCoarseTol", 1e-2));
-            // K-cycle (Krylov-accelerated coarse correction) vs plain V-cycle.
-            // The unsmoothed-aggregation V-cycle degrades with problem size; the
-            // K-cycle recovers a mesh-independent, GAMG-class rate. Default true
-            // — it is a strict convergence improvement at the same FP64 answer
-            // (the outer Krylov firewall is unchanged). Opt out: spumeKcycle false.
+            // K-cycle: Krylov-accelerated coarse correction, GAMG-class rate on
+            // unsmoothed aggregation. Default on (same FP64 answer, ADR-0002).
             const bool kcycle = controlDict_.getOrDefault<bool>("spumeKcycle", true);
-            // Number of finest coarse levels that get Krylov acceleration. Small
-            // (2) bounds the K-cycle fan-out on deep hierarchies while capturing
-            // the coarse-space correction where it matters most.
             const int kcycleLevels =
                 static_cast<int>(controlDict_.getOrDefault<label>("spumeKcycleLevels", 5));
 
             if (pc == "chebyshevFP32")
             {
-                precond = std::make_unique<spume::ChebyshevPrecond<float>>
+                localPrecond = std::make_unique<spume::ChebyshevPrecond<float>>
                 (
                     spume::make_eq_operator<float>(csr), copt, disp
                 );
             }
-            else if (pc == "amgFP32")
+            else if (pc == "amgFP32" || pc == "amgFP64")
             {
-                // FP32 algebraic multigrid with SPUME's own greedy coarsening.
-                precond = std::make_unique<spume::AmgPrecond<float>>(csr, copt, 200, 20, coarseTol, 500, disp, kcycle, kcycleLevels);
-            }
-            else if (pc == "amgFP64")
-            {
-                precond = std::make_unique<spume::AmgPrecond<double>>(csr, copt, 200, 20, coarseTol, 500, disp, kcycle, kcycleLevels);
+                // Self-coarsening AMG. Cache the aggregation hierarchy (static)
+                // and build the operators fresh from `csr` each solve.
+                std::vector<spume::Aggregation> freshAggs;
+                const bool cacheHit = amgCache && g_amgCache.valid
+                    && g_amgCache.key == meshKey
+                    && g_amgCache.ncells == nCells
+                    && g_amgCache.name == pc;
+                if (amgCache && !cacheHit)
+                {
+                    g_amgCache.aggs = spume::aggregate_hierarchy(csr, 200, 20);
+                    g_amgCache.key = meshKey;
+                    g_amgCache.ncells = nCells;
+                    g_amgCache.name = pc;
+                    g_amgCache.valid = true;
+                }
+                else if (!amgCache)
+                {
+                    freshAggs = spume::aggregate_hierarchy(csr, 200, 20);
+                }
+                const std::vector<spume::Aggregation>& aggs =
+                    amgCache ? g_amgCache.aggs : freshAggs;
+
+                if (pc == "amgFP32")
+                {
+                    localPrecond = std::make_unique<spume::AmgPrecond<float>>(csr, aggs, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
+                }
+                else
+                {
+                    localPrecond = std::make_unique<spume::AmgPrecond<double>>(csr, aggs, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
+                }
             }
             else if (pc == "gamgFP32" || pc == "gamgFP64")
             {
-                // Reuse OpenFOAM's cached, high-quality GAMGAgglomeration
-                // hierarchy (amortised across all solves — it is a MeshObject),
-                // and run the SPUME FP32/FP64 Chebyshev V-cycle on it. This is
-                // the "reuse the trunk, own the kernels" path (ADR-0001).
+                // Reuse OpenFOAM's cached GAMGAgglomeration hierarchy (a
+                // MeshObject) and run the SPUME FP32/FP64 V-cycle on it; the
+                // operators are rebuilt from the current matrix each solve. This
+                // is the "reuse the trunk, own the kernels" path (ADR-0001).
                 const GAMGAgglomeration& gagg =
                     GAMGAgglomeration::New(matrix_, controlDict_);
 
@@ -270,11 +325,11 @@ Foam::solverPerformance Foam::spumePCG::solve
 
                 if (pc == "gamgFP32")
                 {
-                    precond = std::make_unique<spume::AmgPrecond<float>>(csr, hierarchy, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
+                    localPrecond = std::make_unique<spume::AmgPrecond<float>>(csr, hierarchy, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
                 }
                 else
                 {
-                    precond = std::make_unique<spume::AmgPrecond<double>>(csr, hierarchy, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
+                    localPrecond = std::make_unique<spume::AmgPrecond<double>>(csr, hierarchy, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
                 }
             }
             else
@@ -285,12 +340,13 @@ Foam::solverPerformance Foam::spumePCG::solve
                     << exit(FatalError);
             }
         }
+        activePrecond = localPrecond.get();
 
         const auto tSetup1 = std::chrono::steady_clock::now();
         const spume::SolveResult res = spume::fcg
         (
             a,
-            *precond,
+            *activePrecond,
             std::span<const double>(b),
             std::span<double>(x),
             opt
