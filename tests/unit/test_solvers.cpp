@@ -128,6 +128,56 @@ TEST_CASE("FCG with FP32 Jacobi and Chebyshev preconditioners converges to FP64 
     }
 }
 
+TEST_CASE("relTol stops at a relative residual reduction, not the absolute floor") {
+    // Mirrors OpenFOAM's max(tolerance, relTol*initialResidual) stop: with the
+    // initial guess 0 the initial relative residual is 1, so rel_tol asks for a
+    // fixed reduction factor and the solve must stop there rather than grinding
+    // down to the (far tighter) absolute tol -- the over-solving the leaf app's
+    // ignored relTol used to cause.
+    auto p = poisson_problem(10, 10, 10, 26);
+
+    spume::SolveOptions tight;
+    tight.tol = 1e-12;
+    std::vector<double> xt(p.b.size(), 0.0);
+    const auto rt = spume::cg(p.a, p.b, xt, tight);
+    REQUIRE(rt.converged);
+
+    spume::SolveOptions o;
+    o.tol = 1e-12;    // absolute floor far below the relTol target
+    o.rel_tol = 1e-3; // reduce the residual 1000x from initial, then stop
+    std::vector<double> x(p.b.size(), 0.0);
+    const auto r = spume::cg(p.a, p.b, x, o);
+    CHECK(r.converged);
+    CHECK(r.iterations < rt.iterations); // stopped earlier than the tight solve
+    const double rr = true_relres(p.a, p.b, x);
+    CHECK(rr <= 5.0 * o.rel_tol); // met the relTol target
+    CHECK(rr > o.tol);            // did NOT over-solve to the absolute floor
+
+    // fcg honours the same target.
+    const auto op32 = spume::make_eq_operator<float>(p.csr);
+    std::vector<double> xf(p.b.size(), 0.0);
+    const auto rf = spume::fcg(p.a, spume::JacobiPrecond<float>(op32), p.b, xf, o);
+    CHECK(rf.converged);
+    CHECK(true_relres(p.a, p.b, xf) <= 5.0 * o.rel_tol);
+}
+
+TEST_CASE("minIter forces at least min_iter iterations") {
+    auto p = poisson_problem(10, 10, 10, 27);
+
+    spume::SolveOptions base;
+    base.tol = 1e-1; // loose: converges in a few iterations
+    std::vector<double> xa(p.b.size(), 0.0);
+    const auto ra = spume::cg(p.a, p.b, xa, base);
+    REQUIRE(ra.converged);
+
+    spume::SolveOptions o = base;
+    o.min_iter = ra.iterations + 5; // demand more than natural convergence
+    std::vector<double> xb(p.b.size(), 0.0);
+    const auto rb = spume::cg(p.a, p.b, xb, o);
+    CHECK(rb.converged);
+    CHECK(rb.iterations >= ra.iterations + 5);
+}
+
 TEST_CASE("solvers reject shape mismatches") {
     auto p = poisson_problem(3, 3, 3, 25);
     std::vector<double> shortb(5, 1.0), x(p.b.size(), 0.0);

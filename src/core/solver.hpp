@@ -12,7 +12,14 @@
 namespace spume {
 
 struct SolveOptions {
-    double tol = 1e-10; // convergence: ||r||_2 <= tol * ||b||_2 (recursive residual)
+    // Convergence: stop once the relative residual ||r||_2/||b||_2 drops to
+    //   max(tol, rel_tol * initial relative residual),
+    // mirroring OpenFOAM's max(tolerance, relTol*initialResidual) stop so a
+    // leaf solver can honour a case's relTol (rel_tol = 0 => absolute tol only,
+    // the previous behaviour). At least min_iter iterations always run.
+    double tol = 1e-10;
+    double rel_tol = 0.0;
+    int min_iter = 0;
     int max_iter = 10000;
     // Policy defaults: reference dispatch, standard reductions. Optimized
     // paths and the deterministic debug mode are opt-in at runtime.

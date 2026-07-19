@@ -3,6 +3,7 @@
 
 #include "core/solver.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <vector>
@@ -52,7 +53,8 @@ SolveResult cg(const Sell<double>& a, std::span<const double> b, std::span<doubl
 
     double rho = dot(r, r, d, m);
     double relres = std::sqrt(rho) / bnorm;
-    if (relres <= opt.tol) {
+    const double target = std::max(opt.tol, opt.rel_tol * relres);
+    if (opt.min_iter <= 0 && relres <= target) {
         return SolveResult{0, relres, true};
     }
     p = r;
@@ -69,7 +71,7 @@ SolveResult cg(const Sell<double>& a, std::span<const double> b, std::span<doubl
 
         const double rho_new = dot(r, r, d, m);
         relres = std::sqrt(rho_new) / bnorm;
-        if (relres <= opt.tol) {
+        if (it >= opt.min_iter && relres <= target) {
             return SolveResult{it, relres, true};
         }
         aypx(rho_new / rho, std::span<const double>(r), std::span<double>(p), d);
@@ -100,7 +102,8 @@ SolveResult fcg(const Sell<double>& a, const Preconditioner& precond, std::span<
         r[i] = b[i] - r[i];
     }
     double relres = nrm2(r, d, m) / bnorm;
-    if (relres <= opt.tol) {
+    const double target = std::max(opt.tol, opt.rel_tol * relres);
+    if (opt.min_iter <= 0 && relres <= target) {
         return SolveResult{0, relres, true};
     }
 
@@ -122,7 +125,7 @@ SolveResult fcg(const Sell<double>& a, const Preconditioner& precond, std::span<
         axpy(-alpha, std::span<const double>(q), std::span<double>(r), d);
 
         relres = std::sqrt(dot(r, r, d, m)) / bnorm;
-        if (relres <= opt.tol) {
+        if (it >= opt.min_iter && relres <= target) {
             return SolveResult{it, relres, true};
         }
 
