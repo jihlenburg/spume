@@ -54,6 +54,30 @@ __global__ void sell_spmv_kernel(const std::int64_t* __restrict__ chunk_ptr,
     y[row] = acc;
 }
 
+// Fused residual r = b - A x in a single pass (opt #1): the intermediate A x is
+// never written to or read from memory.
+__global__ void sell_residual_kernel(const std::int64_t* __restrict__ chunk_ptr,
+                                      const double* __restrict__ val,
+                                      const std::int32_t* __restrict__ colidx,
+                                      const double* __restrict__ b, const double* __restrict__ x,
+                                      double* __restrict__ r, int nrows) {
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= nrows) {
+        return;
+    }
+    const int c = row >> 3;
+    const int lane = row & 7;
+    const std::int64_t base = chunk_ptr[c];
+    const std::int64_t w = (chunk_ptr[c + 1] - base) >> 3;
+    double acc = 0.0;
+    std::int64_t off = base + lane;
+    for (std::int64_t j = 0; j < w; ++j) {
+        acc += val[off] * x[colidx[off]];
+        off += 8;
+    }
+    r[row] = b[row] - acc;
+}
+
 constexpr int kBlock = 256;
 
 } // namespace
@@ -105,6 +129,20 @@ void SellDeviceFP64::spmv(std::span<const double> x, std::span<double> y) const 
     SPUME_HIP_CHECK(hipGetLastError());
     SPUME_HIP_CHECK(hipDeviceSynchronize());
     std::copy(d_y_, d_y_ + nrows_, y.begin());
+}
+
+void SellDeviceFP64::spmv_device(const double* x_dev, double* y_dev) const {
+    const int grid = (nrows_ + kBlock - 1) / kBlock;
+    sell_spmv_kernel<<<grid, kBlock>>>(d_chunk_ptr_, d_val_, d_colidx_, x_dev, y_dev, nrows_);
+    SPUME_HIP_CHECK(hipGetLastError());
+}
+
+void SellDeviceFP64::residual_device(const double* b_dev, const double* x_dev,
+                                     double* r_dev) const {
+    const int grid = (nrows_ + kBlock - 1) / kBlock;
+    sell_residual_kernel<<<grid, kBlock>>>(d_chunk_ptr_, d_val_, d_colidx_, b_dev, x_dev, r_dev,
+                                           nrows_);
+    SPUME_HIP_CHECK(hipGetLastError());
 }
 
 double SellDeviceFP64::kernel_ms(int reps) const {

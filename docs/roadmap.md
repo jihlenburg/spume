@@ -97,13 +97,21 @@ memory m3-gpu-bandwidth-validated):
   and verified (`VcycleDeviceFP32`, gpu-vcycle-check): in-class vs the CPU
   `AmgPrecond<float>` (max_abs/‖z‖∞ 1.2e-7 on a 15-level poisson7 96³ hierarchy),
   **17 ms/cycle = 3.1× the CPU apply** — coarsest solved on the CPU, one host
-  sync per cycle. The 3.1× (vs 8× for SpMV) is the coarse-level launch tax, now
-  the top V-cycle optimization target. Remaining: attack that tax (batch coarse
-  kernels / larger CPU coarsest); port the K-cycle; the whole-solve GPU-resident
-  FCG (fuse CG reductions, one sync/outer-iter); the cell-count fallback; then the
-  heterogeneous coarse-on-CPU / fine-on-GPU split. rocprof roofline is blocked by
-  a gfx1151 PMC-counter limitation (bandwidth stays model-over-kernel-time,
-  ADR-0013).
+  sync per cycle. The 3.1× (vs 8× for SpMV) is the coarse-level launch tax.
+- **The whole-solve GPU-resident FCG is landed and verified (`FcgSolverGPU`,
+  gpu-fcg-check) — the M3 engine.** On poisson7 96³ (tol 1e-8) it solves to FP64
+  accuracy entirely on the GPU (true residual 3.3e-9), with **iteration counts
+  identical to the CPU (24 == 24)** and GPU/CPU solutions agreeing to **1.2e-14**
+  — the empirical proof of the ADR-0002 firewall (the FP32 preconditioner yields
+  a bit-class-identical FP64 answer). **3.4× the CPU solve**, bounded by the
+  coarse-level tax. The full path — SpMV, FP32 Chebyshev smoother, aggregation
+  transfers, FP32 V-cycle, FP64 reduction, FP64 FCG — is GPU-resident, each stage
+  at 81–87% of the memory roofline where it is bandwidth-bound.
+  Remaining M3 work: attack the coarse-level tax (batch coarse kernels / larger
+  CPU coarsest); port the K-cycle (the reduction primitive now exists); share the
+  fine operator (built twice today); the cell-count fallback; the demo container
+  (motorBike/DrivAer on Strix Halo). rocprof roofline is blocked by a gfx1151
+  PMC-counter limitation (bandwidth stays model-over-kernel-time, ADR-0013).
 
 ## M4 — Explicit engine showcase (ADR-0010)
 

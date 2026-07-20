@@ -39,6 +39,14 @@ public:
     // ncols()/nrows(); values are staged through the resident scratch buffers.
     void spmv(std::span<const double> x, std::span<double> y) const;
 
+    // Device-to-device operator applications for a resident solve (no host
+    // staging, no sync -- the outer loop syncs at its reductions):
+    //   spmv_device:     y = A x
+    //   residual_device: r = b - A x  (fused, one pass -- opt #1)
+    // All pointers are into resident (managed) memory sized to nrows()/ncols().
+    void spmv_device(const double* x_dev, double* y_dev) const;
+    void residual_device(const double* b_dev, const double* x_dev, double* r_dev) const;
+
     // Mean GPU kernel time over `reps` launches on the currently-resident x
     // (call spmv() at least once first to populate it). Times the kernel only --
     // no host staging -- via HIP events, for a clean achieved-bandwidth figure.

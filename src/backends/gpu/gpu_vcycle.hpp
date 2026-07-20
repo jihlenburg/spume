@@ -43,6 +43,11 @@ public:
     // nrows; staged through resident buffers. Blocking.
     void apply(std::span<const double> r, std::span<double> z) const;
 
+    // Device-to-device apply for the resident FCG: one V-cycle on device buffers
+    // (no host staging). Runs the internal coarse-solve sync; the caller syncs
+    // again at its next reduction. r_dev, z_dev have the finest nrows.
+    void apply_device(const double* r_dev, double* z_dev) const { cycle(0, r_dev, z_dev); }
+
     // Mean cycle time over `reps` applies on the resident input (call apply()
     // once first). Includes the CPU coarse solve, so it is the true apply cost.
     double kernel_ms(int reps) const;

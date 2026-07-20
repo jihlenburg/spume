@@ -7,9 +7,9 @@
 # here -- HIP's <<<>>> launch syntax is not ISO C++ and -Wpedantic rejects it.
 
 add_library(spume-gpu STATIC
-    gpu_spmv.hip.cpp gpu_cheb.hip.cpp gpu_transfer.hip.cpp gpu_vcycle.hip.cpp gpu_reduce.hip.cpp)
+    gpu_spmv.hip.cpp gpu_cheb.hip.cpp gpu_transfer.hip.cpp gpu_vcycle.hip.cpp gpu_reduce.hip.cpp gpu_fcg.hip.cpp)
 set_source_files_properties(
-    gpu_spmv.hip.cpp gpu_cheb.hip.cpp gpu_transfer.hip.cpp gpu_vcycle.hip.cpp gpu_reduce.hip.cpp
+    gpu_spmv.hip.cpp gpu_cheb.hip.cpp gpu_transfer.hip.cpp gpu_vcycle.hip.cpp gpu_reduce.hip.cpp gpu_fcg.hip.cpp
     PROPERTIES LANGUAGE HIP)
 target_include_directories(spume-gpu PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(spume-gpu PUBLIC spume::core)
@@ -19,7 +19,7 @@ set_target_properties(spume-gpu PROPERTIES
 target_compile_options(spume-gpu PRIVATE -Wall -Wextra)
 
 # Verify-then-bench gates (one per kernel), compiled as HIP.
-foreach(check spmv cheb transfer vcycle reduce)
+foreach(check spmv cheb transfer vcycle reduce fcg)
     add_executable(spume-gpu-${check}-check ${check}_check.cpp)
     set_source_files_properties(${check}_check.cpp PROPERTIES LANGUAGE HIP)
     set_target_properties(spume-gpu-${check}-check PROPERTIES HIP_ARCHITECTURES "${SPUME_HIP_ARCH}")
@@ -41,6 +41,7 @@ if(SPUME_BUILD_TESTS)
     add_test(NAME gpu-transfer-check COMMAND spume-gpu-transfer-check)
     add_test(NAME gpu-vcycle-check COMMAND spume-gpu-vcycle-check)
     add_test(NAME gpu-reduce-check COMMAND spume-gpu-reduce-check)
-    set_tests_properties(gpu-spmv-check gpu-cheb-check gpu-transfer-check gpu-vcycle-check gpu-reduce-check
+    add_test(NAME gpu-fcg-check COMMAND spume-gpu-fcg-check)
+    set_tests_properties(gpu-spmv-check gpu-cheb-check gpu-transfer-check gpu-vcycle-check gpu-reduce-check gpu-fcg-check
         PROPERTIES LABELS gpu)
 endif()

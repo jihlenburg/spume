@@ -30,6 +30,13 @@ the portable CPU reference stays the default (ADR-0004) — this backend is opt-
   residual → restrict → recurse → prolong → post-smooth, with the coarsest level
   solved on the CPU (opt #4). Mirrors the CPU `AmgPrecond<float>` V-cycle; one
   host sync per apply. Folds in the fused residual (opt #1).
+- `gpu_reduce.{hpp,hip.cpp}` — the FP64 dot reduction (`DotDeviceFP64`): block
+  tree + host partial-sum, for the Krylov scalars.
+- `gpu_fcg.{hpp,hip.cpp}` — the **whole-solve GPU-resident flexible CG**
+  (`FcgSolverGPU`), the M3 goal: `A x = b` solved entirely on the GPU, FP64 outer
+  Krylov preconditioned by the resident FP32 V-cycle. Vectors stay device-
+  resident across iterations; the only host traffic is b/x and the scalar dot
+  results driving alpha/beta.
 - `*_check.cpp` — verify-(then-bench) gates (ADR-0016 discipline): build a
   poisson7 operator, run the kernel on the GPU, VERIFY against the CPU reference
   within the reorder-tolerance class (ADR-0017), then MEASURE achieved GB/s.
@@ -59,6 +66,13 @@ OFF) never touches this directory.
   The 3.1× (vs 8× for raw SpMV) is the coarse-level tax: with 15 levels the small
   coarse levels are launch-latency-bound and the CPU coarse solve serialises the
   cycle — see opt #4 below.
+- **FP64 dot reduction: 224 GB/s (87% of peak).**
+- **Whole-solve GPU FCG (poisson7 96³, tol 1e-8) — the M3 goal:** solves to FP64
+  accuracy on the GPU (**true residual 3.3e-9**), **identical convergence to the
+  CPU (24 == 24 iterations)**, and the GPU/CPU solutions agree to **1.2e-14** —
+  the empirical proof of the ADR-0002 firewall: the FP32 preconditioner yields a
+  bit-class-identical FP64 answer. **3.4× the CPU solve** (bounded by the same
+  coarse-level tax, since each iteration is a V-cycle apply).
 
 Bandwidth is the documented traffic model over HIP-event kernel time (ADR-0013
 honest-degradation methodology), which structurally cannot overstate achieved
@@ -126,9 +140,15 @@ assembly:
 
 ## Next (M3 Phase 3)
 
-The FP32 V-cycle is assembled and verified in-class. Next: attack the coarse-level
-tax (opt #4 — the highest-leverage V-cycle win); port the K-cycle acceleration
-(the CPU already reaches GAMG-parity iterations with it); wrap the cycle in the
-whole-solve GPU-resident FCG (fuse the CG reductions, one sync per outer
-iteration); then the measured cell-count fallback to the CPU path. Prototypes for
-the full solve are in `~/spume-m3-gpu-prototypes/`.
+The whole-solve GPU-resident FCG is landed and verified — the M3 engine works.
+Remaining, in leverage order:
+1. **Attack the coarse-level tax** (opt #4) — the 3.4× is bounded by the coarse
+   V-cycle overhead, so this is the highest-leverage win for the whole solve.
+2. **Port the K-cycle** (the reduction now exists for its Krylov acceleration) so
+   the GPU reaches the CPU's GAMG-parity iteration counts on hard graded meshes.
+3. **Share the fine operator** — `FcgSolverGPU` currently builds it twice (once
+   for `A p`, once as V-cycle level 0); reuse one resident copy (~200 MB saved on
+   the 96³ case).
+4. **Fuse the per-iteration reductions** (fewer syncs) and the **cell-count
+   fallback** to the CPU path.
+Prototypes for the full solve are in `~/spume-m3-gpu-prototypes/`.
