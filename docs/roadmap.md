@@ -157,6 +157,19 @@ memory m3-gpu-bandwidth-validated):
   the resident hierarchy once, re-upload only the changed values per solve) --
   the ADR-0017 residency goal. Then the direct stock-GAMG wall-time comparison
   on the same live case is honest and favorable.
+- **Direct live stock comparison done (2026-07-20), and it is humbling.** 782k
+  refined pitz, 10 steps, tol 1e-8, same box: **stock GAMG 25.3 s (43 p-iters) |
+  SPUME gpuFCG 34.4 s (19) | SPUME amgFP32-CPU 188 s (19).** SPUME converges in
+  ~half the iterations but is SLOWER in wall time -- it is **not yet superior to
+  stock GAMG live.** Causes, both known: (1) the CPU path is crippled by the
+  coarse-solve pathology at the M2 defaults (kml5/coarse_max_iter500) -> 18.8
+  s/step; the coarse cap (100) + kml2 that the GPU already uses must be brought to
+  the CPU/AmgPrecond path too. (2) the GPU is 3.4 s/step -- close to GAMG's 2.5 --
+  but pays ~2 s per-solve hierarchy REBUILD on top of its 1.35 s solve. **The
+  amortization math is decisive: a coefficient-only GPU update removes the ~2 s
+  rebuild -> ~1.35 s/step -> ~1.85x FASTER than stock GAMG.** That single
+  optimization is what turns "runs end-to-end" into "superior", so it is THE
+  priority. Also bring the coarse cap to the CPU AmgPrecond (fixes the 188 s).
   rocprof roofline is blocked by a gfx1151 PMC-counter limitation (bandwidth
   stays model-over-kernel-time, ADR-0013).
 
