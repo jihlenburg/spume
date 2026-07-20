@@ -116,10 +116,22 @@ memory m3-gpu-bandwidth-validated):
   from 20 (V-cycle) to 12 iterations and matches the CPU `AmgPrecond<float>`
   K-cycle exactly (12 == 12), solutions agreeing to 3.8e-15 — GAMG-parity
   convergence on graded meshes, GPU-resident.
-  Remaining M3 work: further coarse-tax wins (overlap CPU coarse with fine GPU;
-  mesh-size-aware coarse_size heuristic); share the fine operator (built twice
-  today); the cell-count fallback; the demo container (motorBike/DrivAer on
-  Strix Halo).
+- **Reality check on a real OpenFOAM matrix (2026-07-20).** Dumped a real SPD
+  pressure system from a refined pitzDaily (782k cells, 59 MB — DRAM-bound, past
+  the MALL cache) via a new `spumeDumpMatrix` diagnostic in spumePCG, and solved
+  it standalone. **Correctness holds** (GPU FCG agrees with a 1e-11 golden
+  reference to ~4e-12). **But performance does NOT transfer from poisson:** the
+  GPU FCG is only ~1.2-1.5x the CPU here, vs 5.6x on structured poisson 96³.
+  It is NOT bandwidth-bound on the real matrix — ~148 ms/iteration vs ~11 ms on
+  poisson at similar row count and FEWER nonzeros, so something other than the
+  fine SpMV dominates the real-mesh cycle (coarse solve / hierarchy / 2D
+  coarsening). `renumberMesh` (half-bandwidth 697k->456) did not fix it; naive
+  RCM on the fine operator alone made it worse (it perturbs the aggregation).
+  **This is now the top M3 problem: find and close the real-matrix per-iteration
+  gap.** The poisson numbers were optimistic.
+  Remaining M3 work: diagnose+fix the real-matrix per-iteration cost (top);
+  further coarse-tax wins; share the fine operator (built twice today); the
+  cell-count fallback; the demo container (motorBike/DrivAer on Strix Halo).
   rocprof roofline is blocked by a gfx1151 PMC-counter limitation (bandwidth
   stays model-over-kernel-time, ADR-0013).
 

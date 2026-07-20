@@ -7,8 +7,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "bridge/ldu_to_sell.hpp"
@@ -112,6 +114,36 @@ std::uint64_t hashAddressing
     return h;
 }
 
+//- One-shot dump of the assembled SPD pressure system (CSR + RHS) to a compiler-
+// independent binary file, for an offline GPU-vs-stock-GAMG solver comparison on
+// an identical real matrix. Enabled by `spumeDumpMatrix true;`. Diagnostic only.
+bool g_matrixDumped = false;
+void dumpSpumeMatrix
+(
+    const std::string& path,
+    const spume::Csr& a,
+    const std::vector<double>& b
+)
+{
+    std::ofstream f(path, std::ios::binary);
+    const std::int64_t nrows = a.nrows;
+    const std::int64_t nnz = static_cast<std::int64_t>(a.val.size());
+    f.write(reinterpret_cast<const char*>(&nrows), sizeof(nrows));
+    f.write(reinterpret_cast<const char*>(&nnz), sizeof(nnz));
+    for (const auto p : a.rowptr)
+    {
+        const std::int64_t v = p;
+        f.write(reinterpret_cast<const char*>(&v), 8);
+    }
+    for (const auto c : a.col)
+    {
+        const std::int32_t v = c;
+        f.write(reinterpret_cast<const char*>(&v), 4);
+    }
+    f.write(reinterpret_cast<const char*>(a.val.data()), nnz * sizeof(double));
+    f.write(reinterpret_cast<const char*>(b.data()), nrows * sizeof(double));
+}
+
 } // End anonymous namespace
 } // End namespace Foam
 
@@ -203,6 +235,30 @@ Foam::solverPerformance Foam::spumePCG::solve
         std::span<const double>{},              // symmetric
         static_cast<int>(nCells)
     );
+
+    // Optional one-shot dump of the assembled SPD system for an offline GPU-vs-
+    // stock-GAMG comparison on an identical real matrix (`spumeDumpMatrix true`).
+    if (controlDict_.getOrDefault<bool>("spumeDumpMatrix", false) && !g_matrixDumped)
+    {
+        const spume::Csr dcsr = spume::assemble_csr
+        (
+            std::span<const int>(lowerAddr.cdata(), lowerAddr.size()),
+            std::span<const int>(upperAddr.cdata(), upperAddr.size()),
+            std::span<const double>(sdiag),
+            std::span<const double>(supper),
+            std::span<const double>{},
+            static_cast<int>(nCells)
+        );
+        std::vector<double> bDump(static_cast<std::size_t>(nCells));
+        for (label i = 0; i < nCells; ++i)
+        {
+            bDump[static_cast<std::size_t>(i)] = sgn*source[i];
+        }
+        dumpSpumeMatrix("spume_matrix.bin", dcsr, bDump);
+        g_matrixDumped = true;
+        Info<< "spumePCG: dumped SPD matrix (" << nCells << " rows, "
+            << dcsr.val.size() << " nnz) to spume_matrix.bin" << endl;
+    }
 
     // Initial residual in OpenFOAM's normalised convention (for logging and
     // the stopping check), matching the reference solvers.
