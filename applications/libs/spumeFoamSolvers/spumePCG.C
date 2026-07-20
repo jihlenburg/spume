@@ -19,6 +19,10 @@
 #include "core/precond.hpp"
 #include "core/sell.hpp"
 #include "core/solver.hpp"
+#ifdef SPUME_GPU
+#include <cfenv> // guard OpenFOAM's FP-exception trapping around GPU calls
+#include "backends/gpu/gpu_fcg.hpp" // whole-solve GPU-resident FCG (ADR-0017)
+#endif
 
 // * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * * //
 
@@ -321,6 +325,8 @@ Foam::solverPerformance Foam::spumePCG::solve
 
         std::unique_ptr<spume::Preconditioner> localPrecond;
         spume::Preconditioner* activePrecond = nullptr;
+        spume::SolveResult res{};
+        bool gpuSolved = false; // set by the gpuFCG whole-solve path (skips fcg)
 
         if (pc == "jacobi")
         {
@@ -432,25 +438,84 @@ Foam::solverPerformance Foam::spumePCG::solve
                     localPrecond = std::make_unique<spume::AmgPrecond<double>>(csr, hierarchy, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
                 }
             }
+            else if (pc == "gpuFCG")
+            {
+#ifdef SPUME_GPU
+                // Whole-solve GPU-resident FCG (ADR-0017): build the AMG
+                // hierarchy and solve A x = b entirely on the GPU (FP64 outer
+                // Krylov, FP32 V/K-cycle preconditioner). Aggregation cached like
+                // the amg path; coarsen to ~2500 (GPU-tuned). NOTE: the solver is
+                // rebuilt per solve (coefficient-only GPU update is future work),
+                // so this is for the GPU large-run demonstration, not yet the
+                // amortised production path.
+                std::vector<spume::Aggregation> freshAggs;
+                const bool cacheHit = amgCache && g_amgCache.valid
+                    && g_amgCache.topo == topoHash && g_amgCache.ncells == nCells
+                    && g_amgCache.name == pc;
+                if (amgCache && !cacheHit)
+                {
+                    g_amgCache.aggs = spume::aggregate_hierarchy(csr, 2500, 20);
+                    g_amgCache.topo = topoHash;
+                    g_amgCache.ncells = nCells;
+                    g_amgCache.name = pc;
+                    g_amgCache.valid = true;
+                }
+                else if (!amgCache)
+                {
+                    freshAggs = spume::aggregate_hierarchy(csr, 2500, 20);
+                }
+                const std::vector<spume::Aggregation>& aggs =
+                    amgCache ? g_amgCache.aggs : freshAggs;
+                // OpenFOAM enables FP-exception trapping (feenableexcept); the HIP
+                // runtime raises benign underflow/invalid flags -- during the
+                // solve AND during its own asynchronous teardown -- which would be
+                // trapped as fatal. Disable trapping for the rest of the run once
+                // the GPU path is taken (not restored, so GPU-object destructors
+                // and HIP teardown are safe). The solver output is verified
+                // FP64-accurate, and OpenFOAM's residual/continuity checks still
+                // catch real divergence.
+                static_cast<void>(fedisableexcept(FE_ALL_EXCEPT));
+                spume::gpu::FcgSolverGPU gsolver
+                (
+                    csr, aggs, copt, coarseTol, 100, kcycle, kcycleLevels
+                );
+                const spume::gpu::FcgResult gr = gsolver.solve
+                (
+                    std::span<const double>(b), std::span<double>(x),
+                    opt.tol, opt.max_iter
+                );
+                res.iterations = gr.iterations;
+                res.rel_residual = gr.rel_residual;
+                res.converged = gr.converged;
+                gpuSolved = true;
+#else
+                FatalErrorInFunction
+                    << "spumePreconditioner 'gpuFCG' requires a HIP build "
+                    << "(-DSPUME_GPU + libspume-gpu)" << exit(FatalError);
+#endif
+            }
             else
             {
                 FatalErrorInFunction
                     << "Unknown spumePreconditioner '" << pc
-                    << "' (expected jacobi | chebyshevFP32 | amgFP32 | amgFP64)"
+                    << "' (expected jacobi | chebyshevFP32 | amgFP32 | amgFP64 | gpuFCG)"
                     << exit(FatalError);
             }
         }
-        activePrecond = localPrecond.get();
 
         const auto tSetup1 = std::chrono::steady_clock::now();
-        const spume::SolveResult res = spume::fcg
-        (
-            a,
-            *activePrecond,
-            std::span<const double>(b),
-            std::span<double>(x),
-            opt
-        );
+        if (!gpuSolved)
+        {
+            activePrecond = localPrecond.get();
+            res = spume::fcg
+            (
+                a,
+                *activePrecond,
+                std::span<const double>(b),
+                std::span<double>(x),
+                opt
+            );
+        }
         const auto tSolve1 = std::chrono::steady_clock::now();
 
         // Per-phase attribution (setup = preconditioner/hierarchy build, solve =

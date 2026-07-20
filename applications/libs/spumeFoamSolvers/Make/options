@@ -8,12 +8,19 @@
  * required for std::span in the bridge header (overrides wmake's default
  * -std=c++17: the last -std wins); -fopenmp pulls the core's OpenMP runtime. */
 
+/* SPUME_GPU_INC / SPUME_GPU_LIBS are empty for a CPU-only build; set them (see
+ * scripts/foam-env.sh --gpu) to link the HIP GPU backend and enable the gpuFCG
+ * preconditioner. The GPU static lib must precede -lspume-core (it references
+ * core symbols) and pulls the HIP runtime via -lamdhip64. */
+
 EXE_INC = \
     -std=c++2a \
+    $(SPUME_GPU_INC) \
     -I$(SPUME_PROJECT_DIR)/src
 
 LIB_LIBS = \
     -L$(SPUME_BUILD_DIR)/src/bridge -lspume-bridge \
+    $(SPUME_GPU_LIBS) \
     -L$(SPUME_BUILD_DIR)/src/core -lspume-core \
     -fopenmp \
     -lOpenFOAM
