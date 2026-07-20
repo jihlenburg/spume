@@ -170,6 +170,20 @@ memory m3-gpu-bandwidth-validated):
   rebuild -> ~1.35 s/step -> ~1.85x FASTER than stock GAMG.** That single
   optimization is what turns "runs end-to-end" into "superior", so it is THE
   priority. Also bring the coarse cap to the CPU AmgPrecond (fixes the 188 s).
+- **Deeper finding (2026-07-20): amortization ALONE will not make SPUME superior
+  on this 2D case.** Instrumented the gpuFCG build-vs-solve split: build ~560 ms
+  + solve ~1.1 s = ~1.66 s/p-solve (19 iters). Even with build->0 the GPU solve
+  (~1.1 s) is ~1.5x SLOWER than GAMG's ~0.75 s p-solve. Root: per-ITERATION cost
+  -- SPUME's K-cycle + 5-step Chebyshev + CPU coarse ~58 ms/iter vs GAMG's
+  DIC-GaussSeidel V-cycle ~17 ms/iter. SPUME converges in fewer iters (19 vs 43)
+  but each is ~3x costlier, and the GPU's fine-SpMV bandwidth win doesn't close it
+  on this **2D, ~5-nnz/row** matrix (a worst case; the 6.2x was dense 3D poisson).
+  So "superior vs stock GAMG" now needs EITHER (a) a large **3D** bandwidth-bound
+  case (untested -- where the fine SpMV dominates and the GPU should win), or (b)
+  a cheaper per-iteration (fewer Chebyshev steps, lighter K-cycle, GPU-resident
+  coarse). Honest status: SPUME GPU is CORRECT and runs large sims end-to-end, but
+  is not yet faster than stock GAMG on a 2D real case; the bandwidth thesis is
+  unproven on real meshes until a large 3D case is run.
   rocprof roofline is blocked by a gfx1151 PMC-counter limitation (bandwidth
   stays model-over-kernel-time, ADR-0013).
 

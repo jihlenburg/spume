@@ -482,15 +482,24 @@ Foam::solverPerformance Foam::spumePCG::solve
                 // FP64-accurate, and OpenFOAM's residual/continuity checks still
                 // catch real divergence.
                 static_cast<void>(fedisableexcept(FE_ALL_EXCEPT));
+                const auto tGpuB0 = std::chrono::steady_clock::now();
                 spume::gpu::FcgSolverGPU gsolver
                 (
                     csr, aggs, copt, coarseTol, coarseMaxIter, kcycle, kcycleLevels
                 );
+                const auto tGpuB1 = std::chrono::steady_clock::now();
                 const spume::gpu::FcgResult gr = gsolver.solve
                 (
                     std::span<const double>(b), std::span<double>(x),
                     opt.tol, opt.max_iter
                 );
+                const auto tGpuS1 = std::chrono::steady_clock::now();
+                if (log_ >= 1)
+                {
+                    using ms = std::chrono::duration<double, std::milli>;
+                    Info<< "gpuFCG split: build " << ms(tGpuB1 - tGpuB0).count()
+                        << " ms, solve " << ms(tGpuS1 - tGpuB1).count() << " ms" << endl;
+                }
                 res.iterations = gr.iterations;
                 res.rel_residual = gr.rel_residual;
                 res.converged = gr.converged;
