@@ -146,6 +146,17 @@ memory m3-gpu-bandwidth-validated):
   kill the remaining sync/idle; stall-aware coarsening; retest on a 3D case (this
   refined 2D pitz is a hard case for the aggregation). Also: share the fine
   operator (built twice); cell-count fallback; the demo container (motorBike).
+- **The GPU FCG runs a large OpenFOAM simulation END TO END (2026-07-20).**
+  `spumePreconditioner gpuFCG` in spumePCG solves the pressure equation entirely
+  on the GPU inside a live run; simpleFoam on the 782k-cell refined pitz runs to
+  a clean End (pressure converging 27->17 iters/step, residuals ~5e-8, correct).
+  The HIP/OpenFOAM FP-trapping conflict is handled (fedisableexcept). BUT it is
+  NOT yet faster live: the GPU hierarchy is rebuilt+re-uploaded every solve
+  (~2-3 s "setup"), erasing the 1.35 s standalone-solve advantage. **The last
+  optimization to be competitive live is the coefficient-only GPU update** (build
+  the resident hierarchy once, re-upload only the changed values per solve) --
+  the ADR-0017 residency goal. Then the direct stock-GAMG wall-time comparison
+  on the same live case is honest and favorable.
   rocprof roofline is blocked by a gfx1151 PMC-counter limitation (bandwidth
   stays model-over-kernel-time, ADR-0013).
 
