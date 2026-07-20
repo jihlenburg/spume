@@ -103,15 +103,20 @@ memory m3-gpu-bandwidth-validated):
   accuracy entirely on the GPU (true residual 3.3e-9), with **iteration counts
   identical to the CPU (24 == 24)** and GPU/CPU solutions agreeing to **1.2e-14**
   — the empirical proof of the ADR-0002 firewall (the FP32 preconditioner yields
-  a bit-class-identical FP64 answer). **3.4× the CPU solve**, bounded by the
-  coarse-level tax. The full path — SpMV, FP32 Chebyshev smoother, aggregation
-  transfers, FP32 V-cycle, FP64 reduction, FP64 FCG — is GPU-resident, each stage
-  at 81–87% of the memory roofline where it is bandwidth-bound.
-  Remaining M3 work: attack the coarse-level tax (batch coarse kernels / larger
-  CPU coarsest); port the K-cycle (the reduction primitive now exists); share the
-  fine operator (built twice today); the cell-count fallback; the demo container
-  (motorBike/DrivAer on Strix Halo). rocprof roofline is blocked by a gfx1151
-  PMC-counter limitation (bandwidth stays model-over-kernel-time, ADR-0013).
+  a bit-class-identical FP64 answer). **5.6× the CPU solve** after the coarse-tax
+  fix: a coarse_size sweep showed the CPU-default coarsening (to 200 rows, 15
+  levels) adds ~10 launch-bound GPU levels with zero convergence benefit, so
+  coarsening only to ~2500 rows (CPU CG takes the coarsest) is 1.7× faster with
+  identical iterations (3.4× → 5.6×). The full path — SpMV, FP32 Chebyshev
+  smoother, aggregation transfers, FP32 V-cycle, FP64 reduction, FP64 FCG — is
+  GPU-resident, each stage at 81–87% of the memory roofline where it is
+  bandwidth-bound.
+  Remaining M3 work: further coarse-tax wins (overlap CPU coarse with fine GPU;
+  mesh-size-aware coarse_size heuristic); port the K-cycle (the reduction
+  primitive now exists); share the fine operator (built twice today); the
+  cell-count fallback; the demo container (motorBike/DrivAer on Strix Halo).
+  rocprof roofline is blocked by a gfx1151 PMC-counter limitation (bandwidth
+  stays model-over-kernel-time, ADR-0013).
 
 ## M4 — Explicit engine showcase (ADR-0010)
 

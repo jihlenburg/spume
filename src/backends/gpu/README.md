@@ -68,11 +68,12 @@ OFF) never touches this directory.
   cycle — see opt #4 below.
 - **FP64 dot reduction: 224 GB/s (87% of peak).**
 - **Whole-solve GPU FCG (poisson7 96³, tol 1e-8) — the M3 goal:** solves to FP64
-  accuracy on the GPU (**true residual 3.3e-9**), **identical convergence to the
-  CPU (24 == 24 iterations)**, and the GPU/CPU solutions agree to **1.2e-14** —
+  accuracy on the GPU (**true residual 8e-9**), **identical convergence to the
+  CPU (24 == 24 iterations)**, and the GPU/CPU solutions agree to **1.3e-14** —
   the empirical proof of the ADR-0002 firewall: the FP32 preconditioner yields a
-  bit-class-identical FP64 answer. **3.4× the CPU solve** (bounded by the same
-  coarse-level tax, since each iteration is a V-cycle apply).
+  bit-class-identical FP64 answer. **5.6× the CPU solve** after the coarse-tax fix
+  (opt #4): coarsening only to ~2500 rows instead of 200 (the CPU-default depth)
+  cut the solve 1.7× — 15→5 levels, same iterations.
 
 Bandwidth is the documented traffic model over HIP-event kernel time (ADR-0013
 honest-degradation methodology), which structurally cannot overstate achieved
@@ -123,14 +124,22 @@ assembly:
    x/y through the host each call; the V-cycle/FCG must keep vectors device-
    resident and use the device-to-device entry points (already provided). A
    whole-solve loop should sync once per outer iteration, not per kernel.
-4. **Coarse-level tax — measured.** The assembled V-cycle runs at 3.1× the CPU
-   (vs 8× for raw SpMV): with 15 levels the small coarse levels are launch-latency-
-   bound (a handful of µs/kernel dwarfs their bandwidth work) and the CPU coarse
-   solve serialises the cycle. Levers: run more of the coarse tail on the CPU
-   concurrent with fine GPU work (the heterogeneous design — never two engines on
-   DRAM at once); batch/fuse the small coarse kernels; or stop coarsening earlier
-   and let the CPU CG take a larger coarsest level. The fine level is where the
-   bandwidth win lives, so this is the highest-leverage V-cycle optimization.
+4. **Coarse-level tax — measured and (partly) fixed.** With the CPU-default
+   coarsening (down to 200 rows, 15 levels) the small coarse levels are launch-
+   latency-bound and the whole FCG solve ran at 3.4× the CPU. A `coarse_size`
+   sweep (poisson7 96³) showed the deep tail adds **zero** convergence benefit:
+
+   | coarse_size | levels | iters | solve ms |
+   |---|---|---|---|
+   | 200 | 16 | 24 | 432 |
+   | 2500 | 5 | 24 | **257** |
+   | 200000 | 3 | 18 | 775 |
+
+   Stopping at ~2500 rows (CPU CG takes the coarsest) is **1.7× faster** with the
+   same iterations → the whole solve went 3.4× → **5.6×**. The FCG check uses the
+   tuned depth. Further levers not yet taken: overlap the CPU coarse solve with
+   fine GPU work (the heterogeneous design), batch the remaining coarse kernels,
+   and make the optimal `coarse_size` a mesh-size-aware heuristic.
 5. **Chebyshev micro-fusions** (scale-in+init; final axpy+scale-out) shave a
    couple of vector round-trips — low priority (chases the last ~15% on an
    already-near-roofline kernel).

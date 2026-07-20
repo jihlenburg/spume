@@ -40,7 +40,12 @@ int main(int argc, char** argv) {
 
     const spume::Csr csr = spume::coo_to_csr(spume::gen::poisson7(n, n, n));
     const spume::Sell<double> A = spume::sell_from_csr(csr);
-    const std::vector<spume::Aggregation> aggs = spume::aggregate_hierarchy(csr);
+    // Coarsen only to ~2500 rows, not the CPU default of 200: measured, the
+    // deeper coarse levels are pure GPU launch-latency tax with no convergence
+    // benefit, and letting the CPU CG take a larger coarsest is ~1.7x faster on
+    // the whole solve (see the coarse-tax note in the README). The CPU reference
+    // uses the same hierarchy, so the comparison stays fair.
+    const std::vector<spume::Aggregation> aggs = spume::aggregate_hierarchy(csr, 2500, 20);
     const auto nr = static_cast<std::size_t>(csr.nrows);
 
     std::vector<double> b(nr);
