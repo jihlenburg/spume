@@ -111,10 +111,15 @@ memory m3-gpu-bandwidth-validated):
   smoother, aggregation transfers, FP32 V-cycle, FP64 reduction, FP64 FCG — is
   GPU-resident, each stage at 81–87% of the memory roofline where it is
   bandwidth-bound.
+- **The K-cycle is ported to the GPU (`VcycleDeviceFP32` kcycle path,
+  gpu-kcycle-check).** On poisson7_graded 64³ (cz 1..1000) it cuts the GPU FCG
+  from 20 (V-cycle) to 12 iterations and matches the CPU `AmgPrecond<float>`
+  K-cycle exactly (12 == 12), solutions agreeing to 3.8e-15 — GAMG-parity
+  convergence on graded meshes, GPU-resident.
   Remaining M3 work: further coarse-tax wins (overlap CPU coarse with fine GPU;
-  mesh-size-aware coarse_size heuristic); port the K-cycle (the reduction
-  primitive now exists); share the fine operator (built twice today); the
-  cell-count fallback; the demo container (motorBike/DrivAer on Strix Halo).
+  mesh-size-aware coarse_size heuristic); share the fine operator (built twice
+  today); the cell-count fallback; the demo container (motorBike/DrivAer on
+  Strix Halo).
   rocprof roofline is blocked by a gfx1151 PMC-counter limitation (bandwidth
   stays model-over-kernel-time, ADR-0013).
 

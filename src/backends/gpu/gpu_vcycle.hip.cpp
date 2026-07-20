@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -69,12 +70,60 @@ __global__ void axpy_k(double a, const double* __restrict__ x, double* __restric
     }
 }
 
+// y = A x  (FP64 SELL SpMV; for the K-cycle's operator applications A c, A d).
+__global__ void spmv_k(const std::int64_t* __restrict__ chunk_ptr,
+                       const double* __restrict__ val, const std::int32_t* __restrict__ colidx,
+                       const double* __restrict__ x, double* __restrict__ y, int nrows) {
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= nrows) {
+        return;
+    }
+    const int c = row >> 3;
+    const int lane = row & 7;
+    const std::int64_t base = chunk_ptr[c];
+    const std::int64_t w = (chunk_ptr[c + 1] - base) >> 3;
+    double acc = 0.0;
+    std::int64_t off = base + lane;
+    for (std::int64_t j = 0; j < w; ++j) {
+        acc += val[off] * x[colidx[off]];
+        off += 8;
+    }
+    y[row] = acc;
+}
+
+// r = b - a * v  (FP64).
+__global__ void bmav_k(const double* __restrict__ b, double a, const double* __restrict__ v,
+                       double* __restrict__ r, int n) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        r[i] = b[i] - a * v[i];
+    }
+}
+
+// x = a * c  (FP64 scale-into).
+__global__ void scale_k(double a, const double* __restrict__ c, double* __restrict__ x, int n) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        x[i] = a * c[i];
+    }
+}
+
+// x = a1 * c + a2 * d  (FP64 two-vector combination).
+__global__ void lincomb2_k(double a1, const double* __restrict__ c, double a2,
+                           const double* __restrict__ d, double* __restrict__ x, int n) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        x[i] = a1 * c[i] + a2 * d[i];
+    }
+}
+
 } // namespace
 
 VcycleDeviceFP32::VcycleDeviceFP32(const Csr& fine, const std::vector<Aggregation>& aggs,
                                    ChebyshevOptions smoother_opt, double coarse_tol,
-                                   int coarse_max_iter)
-    : coarse_tol_(coarse_tol), coarse_max_iter_(coarse_max_iter) {
+                                   int coarse_max_iter, bool kcycle, int kcycle_max_levels)
+    : coarse_tol_(coarse_tol), coarse_max_iter_(coarse_max_iter), kcycle_(kcycle),
+      kcycle_max_levels_(kcycle_max_levels) {
     int dev = 0;
     SPUME_HIP_CHECK(hipGetDevice(&dev));
 
@@ -113,6 +162,13 @@ VcycleDeviceFP32::VcycleDeviceFP32(const Csr& fine, const std::vector<Aggregatio
         SPUME_HIP_CHECK(hipMallocManaged(&lev.d_sm, n * sizeof(double)));
         SPUME_HIP_CHECK(hipMallocManaged(&lev.d_rc, nc * sizeof(double)));
         SPUME_HIP_CHECK(hipMallocManaged(&lev.d_ec, nc * sizeof(double)));
+        if (kcycle) { // Krylov-direction workspace, only when the K-cycle is on
+            SPUME_HIP_CHECK(hipMallocManaged(&lev.d_kc, n * sizeof(double)));
+            SPUME_HIP_CHECK(hipMallocManaged(&lev.d_kv, n * sizeof(double)));
+            SPUME_HIP_CHECK(hipMallocManaged(&lev.d_kd, n * sizeof(double)));
+            SPUME_HIP_CHECK(hipMallocManaged(&lev.d_kw, n * sizeof(double)));
+            SPUME_HIP_CHECK(hipMallocManaged(&lev.d_kr, n * sizeof(double)));
+        }
 
         levels_.push_back(std::move(lev));
         cur = galerkin(cur, agg);
@@ -134,6 +190,11 @@ VcycleDeviceFP32::~VcycleDeviceFP32() {
         static_cast<void>(hipFree(lev.d_sm));
         static_cast<void>(hipFree(lev.d_rc));
         static_cast<void>(hipFree(lev.d_ec));
+        static_cast<void>(hipFree(lev.d_kc)); // nullptr (no-op) when kcycle is off
+        static_cast<void>(hipFree(lev.d_kv));
+        static_cast<void>(hipFree(lev.d_kd));
+        static_cast<void>(hipFree(lev.d_kw));
+        static_cast<void>(hipFree(lev.d_kr));
     }
     static_cast<void>(hipFree(d_r0_));
     static_cast<void>(hipFree(d_z0_));
@@ -155,6 +216,53 @@ void VcycleDeviceFP32::coarse_solve_host(const double* rc_dev, double* ec_dev,
     std::copy(ec_host.begin(), ec_host.end(), ec_dev); // visible to the next kernel
 }
 
+void VcycleDeviceFP32::coarse_solve(std::size_t lvl, const double* b, double* x) const {
+    if (lvl == levels_.size()) {
+        coarse_solve_host(b, x, static_cast<index_t>(coarsest_.nrows));
+        return;
+    }
+    const Level& L = levels_[lvl];
+    const int n = L.nrows;
+    const int g = grid_for(n);
+    if (!kcycle_ || static_cast<int>(lvl) > kcycle_max_levels_) {
+        cycle(lvl, b, x); // plain V-cycle
+        return;
+    }
+    // Notay's aggregation-AMG K-cycle: project the coarse correction onto
+    // span{c, d} with c = M b and d = M(b - alpha A c) (Galerkin/Ritz over the
+    // two directions), a residual test skipping the second when the first
+    // already cuts the residual >=4x -- keeping the fan-out near-linear.
+    cycle(lvl, b, L.d_kc); // c = M b
+    spmv_k<<<g, kBlock>>>(L.d_chunk_ptr, L.d_val, L.d_colidx, L.d_kc, L.d_kv, n); // v = A c
+    const double rho1 = dot_.dot(L.d_kc, b, n);
+    const double sig1 = dot_.dot(L.d_kc, L.d_kv, n);
+    if (!(sig1 > 0.0)) {
+        scale_k<<<g, kBlock>>>(1.0, L.d_kc, x, n); // not SPD-usable: x = c
+        return;
+    }
+    const double alpha = rho1 / sig1;
+    bmav_k<<<g, kBlock>>>(b, alpha, L.d_kv, L.d_kr, n); // r1 = b - alpha v
+    const double nb = dot_.dot(b, b, n);
+    const double nr = dot_.dot(L.d_kr, L.d_kr, n);
+    if (nr <= 0.0625 * nb) { // ||r1|| <= 0.25 ||b|| : one direction is enough
+        scale_k<<<g, kBlock>>>(alpha, L.d_kc, x, n); // x = alpha c
+        return;
+    }
+    cycle(lvl, L.d_kr, L.d_kd); // d = M r1
+    spmv_k<<<g, kBlock>>>(L.d_chunk_ptr, L.d_val, L.d_colidx, L.d_kd, L.d_kw, n); // w = A d
+    const double gam = dot_.dot(L.d_kc, L.d_kw, n);
+    const double bet = dot_.dot(L.d_kd, L.d_kw, n);
+    const double rho2 = dot_.dot(L.d_kd, b, n);
+    const double det = sig1 * bet - gam * gam;
+    if (!(std::abs(det) > 0.0)) { // directions dependent: fall back to one
+        scale_k<<<g, kBlock>>>(alpha, L.d_kc, x, n);
+        return;
+    }
+    const double a1 = (rho1 * bet - gam * rho2) / det;
+    const double a2 = (sig1 * rho2 - gam * rho1) / det;
+    lincomb2_k<<<g, kBlock>>>(a1, L.d_kc, a2, L.d_kd, x, n); // x = a1 c + a2 d
+}
+
 void VcycleDeviceFP32::cycle(std::size_t lvl, const double* r_dev, double* z_dev) const {
     const Level& L = levels_[lvl];
     const int n = L.nrows;
@@ -167,12 +275,9 @@ void VcycleDeviceFP32::cycle(std::size_t lvl, const double* r_dev, double* z_dev
     // rc = P^T res
     L.transfer->restrict_device(L.d_res, L.d_rc);
 
-    // coarse correction ec = A_c^{-1} rc
-    if (lvl + 1 == levels_.size()) {
-        coarse_solve_host(L.d_rc, L.d_ec, L.ncoarse);
-    } else {
-        cycle(lvl + 1, L.d_rc, L.d_ec);
-    }
+    // coarse correction ec = A_c^{-1} rc: host CG at the coarsest, else a plain
+    // V-cycle or the Krylov-accelerated K-cycle at level lvl+1.
+    coarse_solve(lvl + 1, L.d_rc, L.d_ec);
 
     // z += P ec
     L.transfer->prolong_add_device(L.d_ec, z_dev);

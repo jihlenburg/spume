@@ -35,7 +35,7 @@ class FcgSolverGPU {
 public:
     FcgSolverGPU(const Csr& fine, const std::vector<Aggregation>& aggs,
                  ChebyshevOptions smoother_opt = {}, double coarse_tol = 1e-2,
-                 int coarse_max_iter = 500);
+                 int coarse_max_iter = 500, bool kcycle = false, int kcycle_max_levels = 5);
     ~FcgSolverGPU();
     FcgSolverGPU(const FcgSolverGPU&) = delete;
     FcgSolverGPU& operator=(const FcgSolverGPU&) = delete;

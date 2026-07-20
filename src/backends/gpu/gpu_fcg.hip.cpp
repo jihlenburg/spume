@@ -48,9 +48,10 @@ __global__ void aypx_k(double a, const double* __restrict__ x, double* __restric
 } // namespace
 
 FcgSolverGPU::FcgSolverGPU(const Csr& fine, const std::vector<Aggregation>& aggs,
-                           ChebyshevOptions smoother_opt, double coarse_tol, int coarse_max_iter)
+                           ChebyshevOptions smoother_opt, double coarse_tol, int coarse_max_iter,
+                           bool kcycle, int kcycle_max_levels)
     : n_(fine.nrows), op_(sell_from_csr(fine)),
-      precond_(fine, aggs, smoother_opt, coarse_tol, coarse_max_iter) {
+      precond_(fine, aggs, smoother_opt, coarse_tol, coarse_max_iter, kcycle, kcycle_max_levels) {
     const auto n = static_cast<std::size_t>(n_);
     SPUME_HIP_CHECK(hipMallocManaged(&d_b_, n * sizeof(double)));
     SPUME_HIP_CHECK(hipMallocManaged(&d_x_, n * sizeof(double)));

@@ -19,7 +19,7 @@ set_target_properties(spume-gpu PROPERTIES
 target_compile_options(spume-gpu PRIVATE -Wall -Wextra)
 
 # Verify-then-bench gates (one per kernel), compiled as HIP.
-foreach(check spmv cheb transfer vcycle reduce fcg)
+foreach(check spmv cheb transfer vcycle reduce fcg kcycle)
     add_executable(spume-gpu-${check}-check ${check}_check.cpp)
     set_source_files_properties(${check}_check.cpp PROPERTIES LANGUAGE HIP)
     set_target_properties(spume-gpu-${check}-check PROPERTIES HIP_ARCHITECTURES "${SPUME_HIP_ARCH}")
@@ -42,6 +42,7 @@ if(SPUME_BUILD_TESTS)
     add_test(NAME gpu-vcycle-check COMMAND spume-gpu-vcycle-check)
     add_test(NAME gpu-reduce-check COMMAND spume-gpu-reduce-check)
     add_test(NAME gpu-fcg-check COMMAND spume-gpu-fcg-check)
-    set_tests_properties(gpu-spmv-check gpu-cheb-check gpu-transfer-check gpu-vcycle-check gpu-reduce-check gpu-fcg-check
+    add_test(NAME gpu-kcycle-check COMMAND spume-gpu-kcycle-check)
+    set_tests_properties(gpu-spmv-check gpu-cheb-check gpu-transfer-check gpu-vcycle-check gpu-reduce-check gpu-fcg-check gpu-kcycle-check
         PROPERTIES LABELS gpu)
 endif()

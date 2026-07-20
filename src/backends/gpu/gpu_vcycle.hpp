@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "backends/gpu/gpu_cheb.hpp"
+#include "backends/gpu/gpu_reduce.hpp"
 #include "backends/gpu/gpu_transfer.hpp"
 #include "core/amg.hpp"
 #include "core/precond.hpp"
@@ -32,9 +33,13 @@ namespace spume::gpu {
 
 class VcycleDeviceFP32 {
 public:
+    // kcycle enables Notay's Krylov-accelerated coarse correction (GAMG-parity
+    // convergence on graded meshes) at coarse levels 1..kcycle_max_levels; the
+    // finest level stays a plain V-cycle (the outer FCG already accelerates it).
     VcycleDeviceFP32(const Csr& fine, const std::vector<Aggregation>& aggs,
                      ChebyshevOptions smoother_opt = {}, double coarse_tol = 1e-2,
-                     int coarse_max_iter = 500);
+                     int coarse_max_iter = 500, bool kcycle = false,
+                     int kcycle_max_levels = 5);
     ~VcycleDeviceFP32();
     VcycleDeviceFP32(const VcycleDeviceFP32&) = delete;
     VcycleDeviceFP32& operator=(const VcycleDeviceFP32&) = delete;
@@ -70,15 +75,28 @@ private:
         double* d_sm = nullptr;
         double* d_rc = nullptr;
         double* d_ec = nullptr;
+        // K-cycle workspace (nrows each): the two Krylov directions c,d, their
+        // operator images v=Ac,w=Ad, and the intermediate residual r1.
+        double* d_kc = nullptr;
+        double* d_kv = nullptr;
+        double* d_kd = nullptr;
+        double* d_kw = nullptr;
+        double* d_kr = nullptr;
     };
 
     void cycle(std::size_t lvl, const double* r_dev, double* z_dev) const;
+    // Coarse correction at level lvl: host CG (coarsest), a plain V-cycle, or
+    // (kcycle) the Krylov-accelerated K-cycle.
+    void coarse_solve(std::size_t lvl, const double* b_dev, double* x_dev) const;
     void coarse_solve_host(const double* rc_dev, double* ec_dev, index_t ncoarse) const;
 
     std::vector<Level> levels_;
     Sell<double> coarsest_; // host operator for the CPU coarse solve
     double coarse_tol_;
     int coarse_max_iter_;
+    bool kcycle_ = false;
+    int kcycle_max_levels_ = 5;
+    DotDeviceFP64 dot_; // resident FP64 reductions for the K-cycle projection
     mutable double* d_r0_ = nullptr; // finest input scratch
     mutable double* d_z0_ = nullptr; // finest output scratch
 };
