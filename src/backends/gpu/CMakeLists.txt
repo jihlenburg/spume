@@ -21,6 +21,14 @@ set_target_properties(spume-gpu-spmv-check PROPERTIES HIP_ARCHITECTURES "${SPUME
 target_link_libraries(spume-gpu-spmv-check PRIVATE spume-gpu spume::core)
 target_compile_options(spume-gpu-spmv-check PRIVATE -Wall -Wextra)
 
+# Single-shot driver for `rocprofv3 --pmc` hardware-counter profiling (not a
+# test -- run under the profiler by hand; see README).
+add_executable(spume-gpu-spmv-pmc spmv_pmc.cpp)
+set_source_files_properties(spmv_pmc.cpp PROPERTIES LANGUAGE HIP)
+set_target_properties(spume-gpu-spmv-pmc PROPERTIES HIP_ARCHITECTURES "${SPUME_HIP_ARCH}")
+target_link_libraries(spume-gpu-spmv-pmc PRIVATE spume-gpu spume::core)
+target_compile_options(spume-gpu-spmv-pmc PRIVATE -Wall -Wextra)
+
 if(SPUME_BUILD_TESTS)
     add_test(NAME gpu-spmv-check COMMAND spume-gpu-spmv-check)
     set_tests_properties(gpu-spmv-check PROPERTIES LABELS gpu)

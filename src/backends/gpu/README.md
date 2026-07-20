@@ -52,19 +52,21 @@ scripts/install_gpu_tooling.sh            # install + verify
 scripts/install_gpu_tooling.sh --verify   # check an existing install
 ```
 
-Kernel trace of the SpMV check (durations per launch):
+Kernel trace (per-dispatch durations) of the controlled-dispatch driver:
 
 ```
 rocprofv3 --kernel-trace --output-format csv -d out -- \
-    ./build/gpu/src/backends/gpu/spume-gpu-spmv-check 128
+    ./build/gpu/src/backends/gpu/spume-gpu-spmv-pmc 128 8
 ```
 
-`rocprofv3 --pmc FETCH_SIZE WRITE_SIZE` gives hardware memory-traffic counters
-(true achieved bytes vs the traffic model) but serialises every dispatch, so
-point it at a single-launch driver, not the 50-rep bench loop. `rocm-bandwidth-test`
-(v2.6+ uses a `run`/`plugin` subcommand CLI) gives the measured DRAM roofline to
-replace the 256 GB/s theoretical denominator. rocprof counter analysis is the
-next profiling pass (see roadmap M3 Phase 3).
+**Hardware counters (`rocprofv3 --pmc`) hang on this gfx1151 APU** even for a
+single dispatch/single counter -- a known PMC limitation on consumer RDNA3.5
+(vs CDNA/Instinct). So achieved bandwidth is the documented traffic model over
+kernel time (ADR-0013), which structurally cannot overstate (the model
+undercounts gather traffic); kernel-trace supplies the time. `rocm-bandwidth-test`
+(v2.6+ uses a `run`/`plugin` subcommand CLI) gives a measured DRAM roofline to
+replace the 256 GB/s theoretical denominator. Revisit `--pmc` when ROCm/driver
+support for gfx1151 counters improves.
 
 ## Next (M3 Phase 3)
 
