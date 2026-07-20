@@ -6,8 +6,9 @@
 # the spume-warnings interface (-Wpedantic -Werror) is deliberately NOT applied
 # here -- HIP's <<<>>> launch syntax is not ISO C++ and -Wpedantic rejects it.
 
-add_library(spume-gpu STATIC gpu_spmv.hip.cpp gpu_cheb.hip.cpp)
-set_source_files_properties(gpu_spmv.hip.cpp gpu_cheb.hip.cpp PROPERTIES LANGUAGE HIP)
+add_library(spume-gpu STATIC gpu_spmv.hip.cpp gpu_cheb.hip.cpp gpu_transfer.hip.cpp)
+set_source_files_properties(gpu_spmv.hip.cpp gpu_cheb.hip.cpp gpu_transfer.hip.cpp
+    PROPERTIES LANGUAGE HIP)
 target_include_directories(spume-gpu PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(spume-gpu PUBLIC spume::core)
 set_target_properties(spume-gpu PROPERTIES
@@ -16,7 +17,7 @@ set_target_properties(spume-gpu PROPERTIES
 target_compile_options(spume-gpu PRIVATE -Wall -Wextra)
 
 # Verify-then-bench gates (one per kernel), compiled as HIP.
-foreach(check spmv cheb)
+foreach(check spmv cheb transfer)
     add_executable(spume-gpu-${check}-check ${check}_check.cpp)
     set_source_files_properties(${check}_check.cpp PROPERTIES LANGUAGE HIP)
     set_target_properties(spume-gpu-${check}-check PROPERTIES HIP_ARCHITECTURES "${SPUME_HIP_ARCH}")
@@ -35,5 +36,6 @@ target_compile_options(spume-gpu-spmv-pmc PRIVATE -Wall -Wextra)
 if(SPUME_BUILD_TESTS)
     add_test(NAME gpu-spmv-check COMMAND spume-gpu-spmv-check)
     add_test(NAME gpu-cheb-check COMMAND spume-gpu-cheb-check)
-    set_tests_properties(gpu-spmv-check gpu-cheb-check PROPERTIES LABELS gpu)
+    add_test(NAME gpu-transfer-check COMMAND spume-gpu-transfer-check)
+    set_tests_properties(gpu-spmv-check gpu-cheb-check gpu-transfer-check PROPERTIES LABELS gpu)
 endif()

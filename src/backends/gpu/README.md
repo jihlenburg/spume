@@ -20,11 +20,15 @@ the portable CPU reference stays the default (ADR-0004) — this backend is opt-
   the equilibrated operator + Saad recurrence run in FP32 on-device (the ADR-0002
   preconditioner interior), residual in / correction out stay FP64 (the firewall).
   Six kernels driving the same recurrence as the CPU `ChebyshevPrecond<float>`.
-- `*_check.cpp` — verify-then-bench gates (ADR-0016 discipline): build a poisson7
-  operator, run the kernel on the GPU, VERIFY against the CPU reference within the
-  reorder-tolerance class (ADR-0017), then MEASURE achieved GB/s. Registered as
-  the `gpu-spmv-check` / `gpu-cheb-check` ctests; skip (exit 0) with no GPU, so
-  they are no-ops on CPU-only machines.
+- `gpu_transfer.{hpp,hip.cpp}` — the aggregation grid-transfer operators
+  (`AggTransferResident`): restrict (`P^T`, FP64 atomic scatter-add) and prolong
+  (`P`, conflict-free gather-add), device-to-device so the V-cycle chains without
+  host round-trips. The last V-cycle primitive before assembly.
+- `*_check.cpp` — verify-(then-bench) gates (ADR-0016 discipline): build a
+  poisson7 operator, run the kernel on the GPU, VERIFY against the CPU reference
+  within the reorder-tolerance class (ADR-0017), then MEASURE achieved GB/s.
+  Registered as the `gpu-spmv-check` / `gpu-cheb-check` / `gpu-transfer-check`
+  ctests; skip (exit 0) with no GPU, so they are no-ops on CPU-only machines.
 
 ## Build & run
 
@@ -76,10 +80,38 @@ undercounts gather traffic); kernel-trace supplies the time. `rocm-bandwidth-tes
 replace the 256 GB/s theoretical denominator. Revisit `--pmc` when ROCm/driver
 support for gfx1151 counters improves.
 
+## Optimization opportunities (scouted)
+
+The individual kernels already run at 81–85% of the memory roofline, so per the
+performance policy the remaining wins are **moving fewer bytes**, not
+instruction-level tuning of a near-roofline kernel. Prioritised for the V-cycle
+assembly:
+
+1. **Fused residual `res = r − A z`** (one kernel, one pass) instead of SpMV then
+   a separate subtract — saves a full read+write of the intermediate `A z` vector
+   per level. Highest-value byte reduction; do it as the V-cycle's residual step.
+2. **Fully-FP32 V-cycle scaffolding.** The transfers/residual are FP64 here to
+   match the CPU reference tightly; an all-FP32 cycle halves the operator,
+   residual, and transfer traffic (the ADR-0002 firewall makes it convergence-
+   safe). Measure the convergence-vs-bandwidth trade before committing.
+3. **Resident chaining kills host copies.** The standalone `apply()`s stage
+   x/y through the host each call; the V-cycle/FCG must keep vectors device-
+   resident and use the device-to-device entry points (already provided). A
+   whole-solve loop should sync once per outer iteration, not per kernel.
+4. **Coarse levels on the CPU.** The coarsest levels are small and launch-latency-
+   bound on the GPU; run them on the CPU concurrent with the fine bandwidth-bound
+   levels (the heterogeneous M3 design — never two engines on DRAM at once).
+5. **Chebyshev micro-fusions** (scale-in+init; final axpy+scale-out) shave a
+   couple of vector round-trips — low priority (chases the last ~15% on an
+   already-near-roofline kernel).
+6. **SELL-C-σ row sorting (σ>1)** cuts padding/improves coalescing on irregular
+   meshes; no benefit on the regular poisson7 test but relevant for real cases
+   (`padding_ratio()` reports the overhead).
+
 ## Next (M3 Phase 3)
 
-SpMV and the FP32 Chebyshev smoother are landed and verified. Next: the FP32
-V-cycle / K-cycle over a resident hierarchy (reusing these kernels), then the
-whole-solve GPU-resident FCG (fuse the CG reductions, drop per-iteration sync),
-and a measured cell-count fallback to the CPU path. Prototypes for the full
-solve are in `~/spume-m3-gpu-prototypes/`.
+SpMV, the FP32 Chebyshev smoother, and the aggregation transfers are landed and
+verified — the full set of V-cycle primitives. Next: assemble the FP32 V-cycle /
+K-cycle over a resident hierarchy (folding in opts 1–4 above), then the
+whole-solve GPU-resident FCG, then the measured cell-count fallback. Prototypes
+for the full solve are in `~/spume-m3-gpu-prototypes/`.
