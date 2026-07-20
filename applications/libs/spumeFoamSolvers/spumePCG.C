@@ -363,6 +363,13 @@ Foam::solverPerformance Foam::spumePCG::solve
                 static_cast<double>(controlDict_.getOrDefault<scalar>("chebyshevEta", 30.0));
             const double coarseTol =
                 static_cast<double>(controlDict_.getOrDefault<scalar>("amgCoarseTol", 1e-2));
+            // Cap the coarsest CG (default 100): the coarse correction is only a
+            // preconditioner component, so a hard cap avoids the aggregation-stall
+            // pathology (an ill-conditioned coarsest whose unpreconditioned CG
+            // runs 400+ iters). No effect on a healthy coarsest (converges under
+            // the cap); measured to cut a real stalled-mesh solve several-fold.
+            const int coarseMaxIter =
+                static_cast<int>(controlDict_.getOrDefault<label>("spumeCoarseMaxIter", 100));
             // K-cycle: Krylov-accelerated coarse correction, GAMG-class rate on
             // unsmoothed aggregation. Default on (same FP64 answer, ADR-0002).
             const bool kcycle = controlDict_.getOrDefault<bool>("spumeKcycle", true);
@@ -402,11 +409,11 @@ Foam::solverPerformance Foam::spumePCG::solve
 
                 if (pc == "amgFP32")
                 {
-                    localPrecond = std::make_unique<spume::AmgPrecond<float>>(csr, aggs, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
+                    localPrecond = std::make_unique<spume::AmgPrecond<float>>(csr, aggs, copt, coarseTol, coarseMaxIter, disp, kcycle, kcycleLevels);
                 }
                 else
                 {
-                    localPrecond = std::make_unique<spume::AmgPrecond<double>>(csr, aggs, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
+                    localPrecond = std::make_unique<spume::AmgPrecond<double>>(csr, aggs, copt, coarseTol, coarseMaxIter, disp, kcycle, kcycleLevels);
                 }
             }
             else if (pc == "gamgFP32" || pc == "gamgFP64")
@@ -431,11 +438,11 @@ Foam::solverPerformance Foam::spumePCG::solve
 
                 if (pc == "gamgFP32")
                 {
-                    localPrecond = std::make_unique<spume::AmgPrecond<float>>(csr, hierarchy, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
+                    localPrecond = std::make_unique<spume::AmgPrecond<float>>(csr, hierarchy, copt, coarseTol, coarseMaxIter, disp, kcycle, kcycleLevels);
                 }
                 else
                 {
-                    localPrecond = std::make_unique<spume::AmgPrecond<double>>(csr, hierarchy, copt, coarseTol, 500, disp, kcycle, kcycleLevels);
+                    localPrecond = std::make_unique<spume::AmgPrecond<double>>(csr, hierarchy, copt, coarseTol, coarseMaxIter, disp, kcycle, kcycleLevels);
                 }
             }
             else if (pc == "gpuFCG")
@@ -477,7 +484,7 @@ Foam::solverPerformance Foam::spumePCG::solve
                 static_cast<void>(fedisableexcept(FE_ALL_EXCEPT));
                 spume::gpu::FcgSolverGPU gsolver
                 (
-                    csr, aggs, copt, coarseTol, 100, kcycle, kcycleLevels
+                    csr, aggs, copt, coarseTol, coarseMaxIter, kcycle, kcycleLevels
                 );
                 const spume::gpu::FcgResult gr = gsolver.solve
                 (
