@@ -16,11 +16,15 @@ the portable CPU reference stays the default (ADR-0004) — this backend is opt-
 - `gpu_spmv.hip.cpp` — the SELL-C-8 FP64 SpMV kernel + resident-operator
   implementation (compiled with hipcc). One thread per row, fixed j-order
   accumulation matching the CPU reference.
-- `spmv_check.cpp` — verify-then-bench gate (ADR-0016 discipline): builds a
-  poisson7 operator, runs it on the GPU, VERIFIES against `spume::spmv`
-  (reference) within the reorder-tolerance class (ADR-0017), then MEASURES
-  achieved GB/s. Registered as the `gpu-spmv-check` ctest; skips (exit 0) with no
-  GPU, so it is a no-op on CPU-only machines.
+- `gpu_cheb.{hpp,hip.cpp}` — the FP32 Chebyshev smoother (`ChebyshevDeviceFP32`):
+  the equilibrated operator + Saad recurrence run in FP32 on-device (the ADR-0002
+  preconditioner interior), residual in / correction out stay FP64 (the firewall).
+  Six kernels driving the same recurrence as the CPU `ChebyshevPrecond<float>`.
+- `*_check.cpp` — verify-then-bench gates (ADR-0016 discipline): build a poisson7
+  operator, run the kernel on the GPU, VERIFY against the CPU reference within the
+  reorder-tolerance class (ADR-0017), then MEASURE achieved GB/s. Registered as
+  the `gpu-spmv-check` / `gpu-cheb-check` ctests; skip (exit 0) with no GPU, so
+  they are no-ops on CPU-only machines.
 
 ## Build & run
 
@@ -35,12 +39,16 @@ OFF) never touches this directory.
 
 ## Measured (gfx1151, poisson7 128³, 2.1M rows)
 
-FP64 SELL SpMV: **~207 GB/s (81% of the 256 GB/s LPDDR5X peak), bitwise-exact vs
-the CPU reference, ~8.3× a single-core CPU reference SpMV.** rocprof is not
-installed on the dev box; bandwidth is the documented traffic model over
-HIP-event kernel time (ADR-0013 honest-degradation methodology), which
-structurally cannot overstate achieved bandwidth (the model undercounts gather
-traffic).
+- **FP64 SELL SpMV: ~207 GB/s (81% of the 256 GB/s LPDDR5X peak), bitwise-exact
+  vs the CPU reference, ~8.3× a single-core CPU reference SpMV.**
+- **FP32 Chebyshev smoother (5 steps): ~219 GB/s (85% of peak), in-class vs the
+  CPU `ChebyshevPrecond<float>` (max_abs/‖z‖∞ 4.6e-7, L2-rel 1.7e-7 — at the
+  ADR-0017 FP32 bar of 2.7e-7).**
+
+Bandwidth is the documented traffic model over HIP-event kernel time (ADR-0013
+honest-degradation methodology), which structurally cannot overstate achieved
+bandwidth (the model undercounts gather traffic). rocprof `--pmc` hardware
+counters would give measured bytes directly but hang on gfx1151 (see above).
 
 ## Profiling / instrumentation
 
@@ -70,7 +78,8 @@ support for gfx1151 counters improves.
 
 ## Next (M3 Phase 3)
 
-Port the FP32 Chebyshev smoother and the K-cycle (prototypes in
-`~/spume-m3-gpu-prototypes/`), keep the whole solve GPU-resident, wire a
-cell-count fallback to the CPU path, and add rocprof roofline evidence once the
-profiler is available.
+SpMV and the FP32 Chebyshev smoother are landed and verified. Next: the FP32
+V-cycle / K-cycle over a resident hierarchy (reusing these kernels), then the
+whole-solve GPU-resident FCG (fuse the CG reductions, drop per-iteration sync),
+and a measured cell-count fallback to the CPU path. Prototypes for the full
+solve are in `~/spume-m3-gpu-prototypes/`.

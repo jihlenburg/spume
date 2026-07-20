@@ -90,11 +90,14 @@ memory m3-gpu-bandwidth-validated):
   a HIP-free host API and a verify-then-bench ctest (`gpu-spmv-check`, skips
   cleanly with no GPU). Measured on gfx1151 (poisson7 128³): **207 GB/s = 81% of
   the 256 GB/s LPDDR5X peak, bitwise-exact vs the CPU reference, 8.3x a
-  single-core reference SpMV.** Remaining: port the FP32 Chebyshev smoother and
-  K-cycle to `src/backends/gpu/`; keep the solve GPU-resident (fuse CG
-  reductions, batch coarse kernels, drop per-iter sync); wire the cell-count
-  fallback; rocprof roofline once the profiler is installed; then the
-  heterogeneous coarse-on-CPU / fine-on-GPU split.
+  single-core reference SpMV.** The FP32 Chebyshev smoother is also landed and
+  verified (`ChebyshevDeviceFP32`, gpu-cheb-check): **~219 GB/s = 85% of peak,
+  in-class vs the CPU `ChebyshevPrecond<float>` at max_abs/‖z‖∞ 4.6e-7.**
+  Remaining: the FP32 V-cycle / K-cycle over a resident hierarchy (reusing these
+  kernels); the whole-solve GPU-resident FCG (fuse CG reductions, batch coarse
+  kernels, drop per-iter sync); the cell-count fallback; then the heterogeneous
+  coarse-on-CPU / fine-on-GPU split. rocprof roofline is blocked by a gfx1151
+  PMC-counter limitation (bandwidth stays model-over-kernel-time, ADR-0013).
 
 ## M4 — Explicit engine showcase (ADR-0010)
 
