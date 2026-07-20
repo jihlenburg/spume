@@ -122,16 +122,25 @@ memory m3-gpu-bandwidth-validated):
   it standalone. **Correctness holds** (GPU FCG agrees with a 1e-11 golden
   reference to ~4e-12). **But performance does NOT transfer from poisson:** the
   GPU FCG is only ~1.2-1.5x the CPU here, vs 5.6x on structured poisson 96³.
-  It is NOT bandwidth-bound on the real matrix — ~148 ms/iteration vs ~11 ms on
-  poisson at similar row count and FEWER nonzeros, so something other than the
-  fine SpMV dominates the real-mesh cycle (coarse solve / hierarchy / 2D
-  coarsening). `renumberMesh` (half-bandwidth 697k->456) did not fix it; naive
-  RCM on the fine operator alone made it worse (it perturbs the aggregation).
-  **This is now the top M3 problem: find and close the real-matrix per-iteration
-  gap.** The poisson numbers were optimistic.
-  Remaining M3 work: diagnose+fix the real-matrix per-iteration cost (top);
-  further coarse-tax wins; share the fine operator (built twice today); the
-  cell-count fallback; the demo container (motorBike/DrivAer on Strix Halo).
+  It is NOT bandwidth-bound on the real matrix. **Root cause (profiled):** the
+  CPU coarse solve, blown up by an aggregation STALL — greedy strength
+  aggregation coarsens 782k->2185 then stalls (2185->685, barely shrinking), so
+  the coarsest is ill-conditioned and the unpreconditioned coarse CG needs ~456
+  iters (vs 40 on poisson); the K-cycle fan-out (default kcycle_max_levels=5)
+  hits that coarsest 32x/FCG-iter, and the GPU sits **79% idle** waiting on the
+  serial host CG (68% of the solve). `renumberMesh` (half-bandwidth 697k->456)
+  did not help; the numbering was never the issue.
+  Matched-kml GPU-vs-CPU on the real matrix: kml5 1.20x, kml2 1.35x, **kml1
+  1.42x** — lowering the fan-out speeds up both engines (fewer coarse solves) and
+  slightly widens the GPU edge (less idle). But the coarse solve is a SHARED
+  Amdahl ceiling (~68%): the fine bandwidth work the GPU wins is only ~32%, so
+  the GPU can't pull far ahead until the coarse bottleneck is fixed.
+  **Top M3 problem, now scoped: fix the coarse solve in the CORE AMG (benefits
+  CPU and GPU both)** — stall-aware coarsening (stop at the last healthy level),
+  a direct/cheap coarsest solve (replace the 456-iter CG), and/or a GPU-resident
+  coarse solve to remove the sync/idle. Then retest on a 3D case (this refined 2D
+  pitz is a hard case for the aggregation). Also: share the fine operator (built
+  twice); cell-count fallback; the demo container (motorBike on Strix Halo).
   rocprof roofline is blocked by a gfx1151 PMC-counter limitation (bandwidth
   stays model-over-kernel-time, ADR-0013).
 
