@@ -93,11 +93,17 @@ memory m3-gpu-bandwidth-validated):
   single-core reference SpMV.** The FP32 Chebyshev smoother is also landed and
   verified (`ChebyshevDeviceFP32`, gpu-cheb-check): **~219 GB/s = 85% of peak,
   in-class vs the CPU `ChebyshevPrecond<float>` at max_abs/‖z‖∞ 4.6e-7.**
-  Remaining: the FP32 V-cycle / K-cycle over a resident hierarchy (reusing these
-  kernels); the whole-solve GPU-resident FCG (fuse CG reductions, batch coarse
-  kernels, drop per-iter sync); the cell-count fallback; then the heterogeneous
-  coarse-on-CPU / fine-on-GPU split. rocprof roofline is blocked by a gfx1151
-  PMC-counter limitation (bandwidth stays model-over-kernel-time, ADR-0013).
+  The aggregation transfers and the assembled **FP32 V-cycle** are also landed
+  and verified (`VcycleDeviceFP32`, gpu-vcycle-check): in-class vs the CPU
+  `AmgPrecond<float>` (max_abs/‖z‖∞ 1.2e-7 on a 15-level poisson7 96³ hierarchy),
+  **17 ms/cycle = 3.1× the CPU apply** — coarsest solved on the CPU, one host
+  sync per cycle. The 3.1× (vs 8× for SpMV) is the coarse-level launch tax, now
+  the top V-cycle optimization target. Remaining: attack that tax (batch coarse
+  kernels / larger CPU coarsest); port the K-cycle; the whole-solve GPU-resident
+  FCG (fuse CG reductions, one sync/outer-iter); the cell-count fallback; then the
+  heterogeneous coarse-on-CPU / fine-on-GPU split. rocprof roofline is blocked by
+  a gfx1151 PMC-counter limitation (bandwidth stays model-over-kernel-time,
+  ADR-0013).
 
 ## M4 — Explicit engine showcase (ADR-0010)
 

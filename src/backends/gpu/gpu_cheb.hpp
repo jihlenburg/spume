@@ -37,6 +37,12 @@ public:
     // residual (call apply() once first). Kernel sequence only, no host staging.
     double kernel_ms(int reps) const;
 
+    // Device-to-device smoother apply (z = M^{-1} r) for use inside a resident
+    // V-cycle: launches the recurrence kernels on the given device buffers with
+    // no host staging and no sync (the cycle syncs once). r_dev, z_dev have
+    // nrows() entries and must be distinct device buffers.
+    void smooth_device(const double* r_dev, double* z_dev) const { launch_apply(r_dev, z_dev); }
+
     index_t nrows() const { return nrows_; }
 
 private:
