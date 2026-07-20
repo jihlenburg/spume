@@ -33,9 +33,13 @@ struct FcgResult {
 
 class FcgSolverGPU {
 public:
+    // coarse_max_iter defaults to 100 -- see VcycleDeviceFP32: the coarsest CG is
+    // a preconditioner component, so capping it avoids the aggregation-stall
+    // pathology (400+ coarse iters, GPU idle) with no effect on a healthy
+    // coarsest. ~3x GPU speedup on a real stalled-coarsening matrix.
     FcgSolverGPU(const Csr& fine, const std::vector<Aggregation>& aggs,
                  ChebyshevOptions smoother_opt = {}, double coarse_tol = 1e-2,
-                 int coarse_max_iter = 500, bool kcycle = false, int kcycle_max_levels = 5);
+                 int coarse_max_iter = 100, bool kcycle = false, int kcycle_max_levels = 5);
     ~FcgSolverGPU();
     FcgSolverGPU(const FcgSolverGPU&) = delete;
     FcgSolverGPU& operator=(const FcgSolverGPU&) = delete;

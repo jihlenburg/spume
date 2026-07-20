@@ -135,12 +135,17 @@ memory m3-gpu-bandwidth-validated):
   slightly widens the GPU edge (less idle). But the coarse solve is a SHARED
   Amdahl ceiling (~68%): the fine bandwidth work the GPU wins is only ~32%, so
   the GPU can't pull far ahead until the coarse bottleneck is fixed.
-  **Top M3 problem, now scoped: fix the coarse solve in the CORE AMG (benefits
-  CPU and GPU both)** — stall-aware coarsening (stop at the last healthy level),
-  a direct/cheap coarsest solve (replace the 456-iter CG), and/or a GPU-resident
-  coarse solve to remove the sync/idle. Then retest on a 3D case (this refined 2D
-  pitz is a hard case for the aggregation). Also: share the fine operator (built
-  twice); cell-count fallback; the demo container (motorBike on Strix Halo).
+  **First fix landed: cap the coarsest CG at 100 iters** (GPU FCG/V-cycle default
+  coarse_max_iter 500->100). The coarse correction is only a preconditioner
+  component, so capping it avoids the stall pathology; on a healthy coarsest the
+  CG converges well under the cap (no-op). Measured on the real matrix: GPU FCG
+  3967 ms -> 1345 ms at kml5 (**2.95x**), with the fair GPU-vs-CPU rising to
+  ~2-2.4x (kml2/3); correct throughout (agrees with the 1e-11 reference to
+  ~5e-12). GPU-only change; the CPU AmgPrecond/M2 path is untouched.
+  Still open (core AMG, benefits both engines): a GPU-resident coarse solve to
+  kill the remaining sync/idle; stall-aware coarsening; retest on a 3D case (this
+  refined 2D pitz is a hard case for the aggregation). Also: share the fine
+  operator (built twice); cell-count fallback; the demo container (motorBike).
   rocprof roofline is blocked by a gfx1151 PMC-counter limitation (bandwidth
   stays model-over-kernel-time, ADR-0013).
 

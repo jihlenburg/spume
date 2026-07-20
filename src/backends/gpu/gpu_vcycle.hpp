@@ -36,9 +36,16 @@ public:
     // kcycle enables Notay's Krylov-accelerated coarse correction (GAMG-parity
     // convergence on graded meshes) at coarse levels 1..kcycle_max_levels; the
     // finest level stays a plain V-cycle (the outer FCG already accelerates it).
+    // coarse_max_iter caps the coarsest CG at 100 by default: the coarse
+    // correction is only a preconditioner component (the flexible outer FCG
+    // tolerates an inexact one), so a hard cap avoids the pathological case where
+    // an aggregation stall leaves an ill-conditioned coarsest whose
+    // unpreconditioned CG runs 400+ iters and leaves the GPU idle. On a healthy
+    // coarsest the CG converges well under the cap, so this is a no-op there;
+    // measured ~3x GPU speedup on a real stalled-coarsening matrix.
     VcycleDeviceFP32(const Csr& fine, const std::vector<Aggregation>& aggs,
                      ChebyshevOptions smoother_opt = {}, double coarse_tol = 1e-2,
-                     int coarse_max_iter = 500, bool kcycle = false,
+                     int coarse_max_iter = 100, bool kcycle = false,
                      int kcycle_max_levels = 5);
     ~VcycleDeviceFP32();
     VcycleDeviceFP32(const VcycleDeviceFP32&) = delete;
